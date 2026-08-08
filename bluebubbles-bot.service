@@ -1,0 +1,46 @@
+[Unit]
+Description=BlueBubbles iMessage bot
+Documentation=file:///opt/bluebubbles-bot/SETUP.md
+After=network-online.target
+Wants=network-online.target
+
+# Do not let a crash loop trip systemd's start limit and give up permanently.
+# (This key lives in [Unit], not [Service].)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=bbbot
+Group=bbbot
+WorkingDirectory=/opt/bluebubbles-bot
+EnvironmentFile=/opt/bluebubbles-bot/.env
+ExecStart=/opt/bluebubbles-bot/.venv/bin/python /opt/bluebubbles-bot/bot.py serve
+
+# The Mac is a fragile dependency -- FileVault means nothing runs after a
+# reboot until someone logs in. Keep restarting; the bot serves fine while the
+# server is unreachable and recovers on its own when it comes back.
+Restart=always
+RestartSec=10
+
+# Unbuffered so journalctl shows log lines as they happen.
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bluebubbles-bot
+
+# Hardening. The bot only needs outbound network and its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/opt/bluebubbles-bot
+
+[Install]
+WantedBy=multi-user.target

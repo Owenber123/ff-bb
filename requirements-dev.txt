@@ -1,0 +1,4 @@
+# Test-only dependencies. The service does not need these.
+#   .venv/bin/pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==8.3.4
