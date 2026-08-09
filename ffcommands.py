@@ -170,7 +170,7 @@ def _head(ctx: CommandContext, view: LeagueView, title: str) -> list[str]:
     """
     ctx.title = title
     if view.is_previous_season:
-        return [f"({view.season} — not yet drafted)", ""]
+        return [f"({view.season} data)", ""]
     return []
 
 

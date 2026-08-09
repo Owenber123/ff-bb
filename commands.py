@@ -81,9 +81,8 @@ HELP_GROUPS: dict[str, tuple[str, ...]] = {
 #
 # A menu of thirty-five is a menu nobody reads: people try three things and
 # never type "!" again. So the default advertises the two that are useful
-# during games and the one that makes somebody screenshot it for a friend,
-# and mentions that the rest exist. Everything still works; only the shop
-# window changed.
+# during games and the one that makes somebody screenshot it for a friend.
+# Everything still works; only the shop window changed.
 # Each entry has to fit one bubble line (~30 columns, less the bot prefix on
 # the first), so the blurbs are three words, not a sentence. The emoji is the
 # anchor the eye lands on.
@@ -107,10 +106,6 @@ def cmd_help(args: str, ctx: CommandContext) -> str:
             f"{icon} {prefix}{usage}:  {blurb}" if blurb else f"{icon} {prefix}{usage}"
             for icon, usage, blurb in HEADLINE_COMMANDS
         ]
-        hidden = len(all_commands()) - len(HEADLINE_COMMANDS)
-        # Kept deliberately: without it nothing points at the other commands,
-        # and the short menu becomes a dead end rather than a front door.
-        lines += ["", f"{prefix}help all for {hidden} more"]
         return "\n".join(lines)
 
     wanted = args.split()[0].lstrip(prefix).lower()

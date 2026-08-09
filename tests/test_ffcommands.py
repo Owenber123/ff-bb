@@ -508,14 +508,12 @@ def test_help_advertises_exactly_three_commands(env):
 
     reply = run(env, "help")
     lines = reply.strip().split("\n")
-    assert len(lines) == 5  # three commands, a blank, and the pointer
+    assert len(lines) == 3  # three commands, nothing else
     assert "!scores" in lines[0]
     assert "!standings" in lines[1]
     assert "!roast" in lines[2]
-    assert lines[3] == ""
-    assert "help all" in lines[4]
     # The whole point: short enough that somebody actually reads it, and no
-    # line so long it wraps into more than the four.
+    # line so long it wraps into more than the three.
     assert len(reply) < 160
 
 
@@ -538,14 +536,10 @@ def test_help_all_still_lists_everything(env):
     assert max(len(line) for line in reply.split("\n")) < 200  # no runaway line
 
 
-def test_the_advertised_count_matches_reality(env):
-    """The 'other N' number must not drift as commands are added."""
+def test_help_all_renders_sections(env):
     import commands  # noqa: F401
 
-    reply = run(env, "help")
-    claimed = int(re.search(r"for (\d+) more", reply).group(1))
     listed = len([line for line in run(env, "help", "all").split("\n") if ":" in line])
-    assert claimed == len(all_commands()) - 3
     assert listed >= 4  # sections actually rendered
 
 
