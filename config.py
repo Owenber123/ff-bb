@@ -34,7 +34,7 @@ def _str(name: str, default: str = "") -> str:
 def _str_raw(name: str, default: str = "") -> str:
     """Like _str but preserves surrounding whitespace.
 
-    Used for BB_BOT_PREFIX, where the trailing space in "bloq-bot: " is
+    Used for BB_BOT_PREFIX, where the trailing space in "🤖 bloqBot - " is
     meaningful. An explicitly empty value stays empty (disabling the feature)
     rather than falling back to the default.
     """
@@ -127,6 +127,9 @@ class Config:
     allowed_chats: list[str] = field(default_factory=list)
     allow_all_chats: bool = False
     reply_on_unknown_command: bool = False
+    # How old a message may be and still be treated as live traffic. See the
+    # replay guard in app.process_event. 0 disables the check.
+    max_message_age_seconds: float = 300.0
 
     # --- Summary ------------------------------------------------------------
     summary_chat: str = ""
@@ -211,7 +214,7 @@ def load_config(require_server: bool = True) -> Config:
     if not prefix:
         raise ConfigError("BB_COMMAND_PREFIX must not be empty")
 
-    bot_prefix = _str_raw("BB_BOT_PREFIX", "bloq-bot: ")
+    bot_prefix = _str_raw("BB_BOT_PREFIX", "🤖 bloqBot - ")
     if bot_prefix.strip().startswith(prefix):
         # Every outgoing message would then begin with the command prefix.
         # The bot-prefix drop layer would still catch it, but the config is
@@ -255,6 +258,7 @@ def load_config(require_server: bool = True) -> Config:
         allowed_chats=_csv("BB_ALLOWED_CHATS"),
         allow_all_chats=_bool("BB_ALLOW_ALL_CHATS", False),
         reply_on_unknown_command=_bool("BB_REPLY_ON_UNKNOWN_COMMAND", False),
+        max_message_age_seconds=_float("BB_MAX_MESSAGE_AGE_S", 300.0),
         summary_chat=_str("BB_SUMMARY_CHAT"),
         summary_source_chats=_csv("BB_SUMMARY_SOURCE_CHATS"),
         summary_days=_int("BB_SUMMARY_DAYS", 7),

@@ -491,7 +491,10 @@ def cmd_post(cfg: Config, args: argparse.Namespace) -> int:
         return 0
 
     if args.post_action == "render":
-        print(text)
+        if getattr(args, "wide", False):
+            print(ffposts.width_report(text, worst=99))
+        else:
+            print(text)
         return 0
 
     # send
@@ -560,6 +563,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_render = post_sub.add_parser("render", help="print a post without sending it")
     p_render.add_argument("kind", help="lineups | sunday | recap | ahead")
     p_render.add_argument("--week", type=int, default=None)
+    p_render.add_argument("--wide", action="store_true",
+                          help="report line widths against the 30-column budget")
     p_send = post_sub.add_parser("send", help="send a post now")
     p_send.add_argument("kind", help="lineups | sunday | recap | ahead")
     p_send.add_argument("--week", type=int, default=None)

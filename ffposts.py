@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ffformat import DOT, fit, pts, truncate
+from ffformat import DOT, MAX_LINE, SCORE_SEP, fit, pts, score_line, short_name
 from ffleague import SLOT_ELIGIBILITY, LeagueView, Side
 from logging_setup import get_logger
 from sleeper import GAME_FINISHED, is_empty_slot
@@ -157,6 +157,28 @@ def _still_playing(view: LeagueView, week: int) -> int:
     )
 
 
+def _name_run(prefix: str, names: list[str], budget: int = MAX_LINE) -> str:
+    """``Up: Ryanmd, TKoop +4`` -- as many names as fit, then a count.
+
+    Taking a fixed first three overflows whenever the names are long, which is
+    exactly when it matters.
+    """
+    from ffformat import display_width
+
+    shown: list[str] = []
+    for name in names:
+        candidate = prefix + ", ".join(shown + [name])
+        remaining = len(names) - len(shown) - 1
+        suffix = f" +{remaining}" if remaining else ""
+        if display_width(candidate + suffix) > budget:
+            break
+        shown.append(name)
+    if not shown:
+        shown = names[:1]
+    left = len(names) - len(shown)
+    return prefix + ", ".join(shown) + (f" +{left}" if left else "")
+
+
 def _scored_matchups(view: LeagueView, week: int) -> list:
     matchups, _, _ = view.matchups(week)
     return [m for m in matchups if m.complete and m.total > 0]
@@ -202,7 +224,7 @@ def build_lineup_check(view: LeagueView, week: int | None = None) -> str | None:
                 name = client.player_name(pid, short=True)
                 team = str(meta.get("team") or "")
                 if on_bye and team in on_bye:
-                    faults.append(f"{name} on bye")
+                    faults.append(f"{name} bye")
                     continue
                 status = str(meta.get("injury_status") or "")
                 if status in BENCH_WORTHY:
@@ -212,19 +234,21 @@ def build_lineup_check(view: LeagueView, week: int | None = None) -> str | None:
                 # Empty slots first: those are certainly wrong, whereas an
                 # OUT designation occasionally gets upgraded by kickoff.
                 severity = (2 if empties else 0) + len(faults)
-                problems.append(
-                    (severity, f"{truncate(side.name, 14)}{DOT}{', '.join(faults[:3])}")
-                )
+                # One fault per line. Two on a line reads fine at 40 characters
+                # and wraps into porridge at 30.
+                for fault in faults[:2]:
+                    problems.append((severity, f"{side.short}{DOT}{fault}"))
 
     if not problems:
         return None  # the whole point: no post at all
 
     problems.sort(reverse=True)
-    lines = [f"⚠️ Week {week} lineup check"]
+    lines: list[str] = []
     lines.extend(text for _, text in problems)
+    lines.append("")
     # Deliberately does not claim how long is left: the schedule endpoint has
     # dates but no kickoff times, so any number here would be invented.
-    lines.append("Lineups lock at kickoff. Fix it or own it.")
+    lines.append("Locks at kickoff.")
     return fit(lines)
 
 
@@ -246,30 +270,28 @@ def build_sunday_update(view: LeagueView, week: int | None = None) -> str | None
     closest = min(scored, key=lambda m: m.margin)
     widest = max(scored, key=lambda m: m.margin)
 
-    lines = [f"🏈 Week {week}{DOT}Sunday night"]
+    lines: list[str] = []
 
     close_high, close_low = closest.ordered()
-    lines.append(
-        f"😬 Closest: {truncate(close_high.name, 14)} {pts(close_high.points)}"
-        f"{DOT}{truncate(close_low.name, 14)} {pts(close_low.points)}"
-    )
+    lines.append("😬 Closest")
+    lines.append(score_line(close_high.short, close_high.points,
+                            close_low.short, close_low.points))
+
     if widest.margin > closest.margin:
         wide_high, wide_low = widest.ordered()
-        lines.append(
-            f"💀 Beatdown: {truncate(wide_high.name, 14)} {pts(wide_high.points)}"
-            f"{DOT}{truncate(wide_low.name, 14)} {pts(wide_low.points)}"
-        )
+        lines.append("")
+        lines.append("💀 Beatdown")
+        lines.append(score_line(wide_high.short, wide_high.points,
+                                wide_low.short, wide_low.points))
 
-    leaders = [m.ordered()[0].name for m in scored if m.margin > 0]
+    leaders = [m.ordered()[0].short for m in scored if m.margin > 0]
     if leaders:
-        shown = ", ".join(truncate(name, 12) for name in leaders[:4])
-        if len(leaders) > 4:
-            shown += f" +{len(leaders) - 4}"
-        lines.append(f"Up right now: {shown}")
+        lines.append("")
+        lines.append(_name_run("Up: ", leaders))
 
     remaining = _still_playing(view, week)
     if remaining:
-        lines.append(f"{remaining} starters still to play.")
+        lines.append(f"{remaining} starters left.")
     return fit(lines)
 
 
@@ -298,34 +320,36 @@ def build_recap(view: LeagueView, week: int | None = None) -> str | None:
     closest = min(scored, key=lambda m: m.margin)
     widest = max(scored, key=lambda m: m.margin)
 
-    lines = [f"🏈 Week {week} final{DOT}{truncate(view.name, 24)}", ""]
+    # No title line and no league name: the message header already says
+    # "bloqBot - recap wk14", and everyone in the chat knows the league.
+    lines: list[str] = []
 
     # Results, best game first -- the scoreboard is the body, not the lead.
     for matchup in sorted(scored, key=lambda m: -m.total):
         winner, loser = matchup.ordered()
-        if matchup.margin == 0:
-            lines.append(f"{truncate(winner.name, 14)} {pts(winner.points)} tied "
-                         f"{truncate(loser.name, 14)} {pts(loser.points)}")
-        else:
-            lines.append(
-                f"{truncate(winner.name, 14)} {pts(winner.points)} def. "
-                f"{truncate(loser.name, 14)} {pts(loser.points)}"
-            )
+        separator = " = " if matchup.margin == 0 else None
+        line = score_line(winner.short, winner.points, loser.short, loser.points)
+        if separator:
+            line = line.replace(SCORE_SEP, separator, 1)
+        lines.append(line)
 
     lines.append("")
-    lines.append(f"🥇 High {pts(high.points)} {truncate(high.name, 14)}")
-    lines.append(f"🗑️ Low {pts(low.points)} {truncate(low.name, 14)}")
+    lines.append(f"🥇 High {pts(high.points)} {high.short}")
+    lines.append(f"🗑️ Low {pts(low.points)} {low.short}")
     if widest.margin > 0:
-        lines.append(f"💀 Blowout {pts(widest.margin)}{DOT}😬 Closest {pts(closest.margin)}")
+        # One superlative per line: the two together were 31 characters.
+        lines.append(f"💀 Blowout {pts(widest.margin)}")
+        lines.append(f"😬 Closest {pts(closest.margin)}")
 
     swap = worst_bench_swap(view, week)
     if swap is not None and swap.gap >= 5:
+        # Broken across lines on purpose. As one sentence this wraps mid-name,
+        # which is exactly the thing that makes a bubble look broken.
         lines.append("")
-        lines.append(
-            f"🪑 Worst call: {truncate(swap.manager_name, 14)} started "
-            f"{swap.started} ({pts(swap.started_points)}) over "
-            f"{swap.benched} ({pts(swap.benched_points)}) — {pts(swap.gap)} lost"
-        )
+        lines.append(f"🪑 Worst call{DOT}{short_name(swap.manager_name)}")
+        lines.append(f"started {swap.started} {pts(swap.started_points)}")
+        lines.append(f"over {swap.benched} {pts(swap.benched_points)}")
+        lines.append(f"−{pts(swap.gap)}")
     return fit(lines)
 
 
@@ -349,7 +373,7 @@ def build_week_ahead(view: LeagueView, week: int | None = None) -> str | None:
     if not pairs:
         return None
 
-    lines = [f"🏈 Week {week}{DOT}{truncate(view.name, 24)}"]
+    lines: list[str] = []
 
     # Lead with the marquee game rather than an unsorted list of six.
     def quality(matchup) -> float:
@@ -360,22 +384,20 @@ def build_week_ahead(view: LeagueView, week: int | None = None) -> str | None:
         a, b = marquee.sides
         record_a = a.manager.record if a.manager else "?"
         record_b = b.manager.record if b.manager else "?"
-        lines.append(
-            f"⭐ Game of the week: {truncate(a.name, 13)} ({record_a})"
-            f" vs {truncate(b.name, 13)} ({record_b})"
-        )
+        lines.append("⭐ Game of the week")
+        lines.append(f"{a.short} {record_a} v {b.short} {record_b}")
         lines.append("")
 
     for matchup in pairs:
         if matchup is marquee:
             continue
         a, b = matchup.sides
-        lines.append(f"{truncate(a.name, 15)} vs {truncate(b.name, 15)}")
+        lines.append(f"{a.short} v {b.short}")
 
     moves = _waiver_lines(view, week, client)
     if moves:
         lines.append("")
-        lines.append("Waivers:")
+        lines.append("Waivers")
         lines.extend(moves[:5])
 
     return fit(lines)
@@ -400,10 +422,8 @@ def _waiver_lines(view: LeagueView, week: int, client) -> list[str]:
             continue  # a bare drop is not news on a Wednesday
         bid = (row.get("settings") or {}).get("waiver_bid")
         cost = f" (${bid})" if bid else ""
-        out.append(
-            f"  {truncate(manager.name if manager else '?', 12)} "
-            f"+{client.player_name(adds[0], short=True)}{cost}"
-        )
+        who = short_name(manager.name) if manager else "?"
+        out.append(f"{who} +{client.player_name(adds[0], short=True)}{cost}")
     return out
 
 
@@ -433,6 +453,23 @@ POST_TYPES: dict[str, PostType] = {
 
 POST_ORDER: tuple[str, ...] = ("lineups", "sunday", "recap", "ahead")
 
+# Header titles. Short by necessity: "🤖 bloqBot - " already spends about half
+# the line, leaving ~17 columns.
+TITLE_FORMATS: dict[str, str] = {
+    "lineups": "lineups wk{week}",
+    "sunday": "sunday wk{week}",
+    "recap": "recap wk{week}",
+    "ahead": "ahead wk{week}",
+}
+
+
+def post_title(kind: str, week: int | None = None) -> str:
+    """The header title for a post, e.g. ``recap wk14``."""
+    fmt = TITLE_FORMATS.get(kind)
+    if not fmt or not week:
+        return kind
+    return fmt.format(week=week)
+
 
 def build(kind: str, view: LeagueView, week: int | None = None) -> str | None:
     post = POST_TYPES.get(kind)
@@ -444,3 +481,31 @@ def build(kind: str, view: LeagueView, week: int | None = None) -> str | None:
         # A builder must never take down the scheduler thread or a command.
         log.exception("scheduled post builder failed", extra={"fields": {"kind": kind}})
         return None
+
+
+def width_report(text: str, budget: int = MAX_LINE, worst: int = 4) -> str:
+    """Line widths for a rendered post, worst first.
+
+    The point of ``!preview <kind> --wide``: checking the budget by eyeballing
+    screenshots does not scale, and ``len()`` lies about emoji.
+    """
+    from ffformat import display_width
+
+    lines = text.split("\n")
+    widths = [(display_width(line), line) for line in lines]
+    longest = max((w for w, _ in widths), default=0)
+    over = [pair for pair in widths if pair[0] > budget]
+
+    out = [
+        f"longest {longest}/{budget}{DOT}{len(lines)} lines",
+        "OVER BUDGET" if over else "within budget ✅",
+        "",
+    ]
+    from ffformat import clip
+
+    for width, line in sorted(widths, key=lambda pair: -pair[0])[:worst]:
+        flag = "!" if width > budget else " "
+        # Clipped, not wrapped: a sample line that wraps is useless as a sample.
+        sample = clip(line, budget - 4) if line else "(blank)"
+        out.append(f"{width:>2}{flag} {sample}")
+    return "\n".join(out)

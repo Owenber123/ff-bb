@@ -29,7 +29,7 @@ import difflib
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
-from ffformat import normalize, normalize_handle
+from ffformat import NAME_WIDTH, clip, normalize, normalize_handle, short_name
 from logging_setup import get_logger
 from sleeper import (
     SleeperClient,
@@ -87,6 +87,36 @@ def points_from_settings(settings: dict, key: str = "fpts") -> float:
         return 0.0
 
 
+def disambiguate_short_names(managers: dict[int, "Manager"]) -> None:
+    """Make sure no two managers render as the same string.
+
+    ``short_name`` strips trailing digits, which is right for "Ryanmd211" and
+    catastrophic for a league containing both "bloqus" and "bloqus2" -- they
+    collapse to the same six characters and the scoreboard reads
+    ``bloqus 3-1 v bloqus 2-2``. Where that happens, the colliding names fall
+    back to a plain clip, which keeps whatever distinguishes them.
+    """
+    groups: dict[str, list[Manager]] = {}
+    for manager in managers.values():
+        manager.short_override = ""
+        groups.setdefault(short_name(manager.name), []).append(manager)
+
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        for manager in group:
+            manager.short_override = clip(manager.name, NAME_WIDTH)
+        # Still identical (two people genuinely called the same thing): number
+        # them, so at least the rows are distinguishable.
+        seen: dict[str, int] = {}
+        for manager in group:
+            key = manager.short_override
+            count = seen.get(key, 0) + 1
+            seen[key] = count
+            if count > 1:
+                manager.short_override = clip(key, NAME_WIDTH - 1) + str(count)
+
+
 def real_players(ids: Iterable[str] | None) -> list[str]:
     """Drop Sleeper's "0" placeholders for unfilled slots.
 
@@ -118,11 +148,23 @@ class Manager:
     starters: list[str] = field(default_factory=list)
     waiver_budget_used: int = 0
     total_moves: int = 0
+    short_override: str = ""
 
     @property
     def name(self) -> str:
         """What the bot calls this person. A nickname wins everywhere, forever."""
         return self.nickname or self.display_name or self.team_name or f"Roster {self.roster_id}"
+
+    @property
+    def short(self) -> str:
+        """The rendered form. Use this in any line with a width budget.
+
+        Nicknames go through the same shortener as Sleeper names, so setting a
+        long nickname cannot blow the layout out. ``short_override`` is set by
+        :func:`disambiguate_short_names` when two managers would otherwise
+        render identically.
+        """
+        return self.short_override or short_name(self.name)
 
     @property
     def formal_name(self) -> str:
@@ -158,6 +200,11 @@ class Side:
     @property
     def name(self) -> str:
         return self.manager.name if self.manager else f"Roster {self.roster_id}"
+
+    @property
+    def short(self) -> str:
+        """Budget-safe rendering name. See Manager.short."""
+        return self.manager.short if self.manager else f"R{self.roster_id}"
 
     def started(self) -> list[tuple[str, float]]:
         """(player_id, points) for filled starter slots, in lineup order."""
@@ -428,8 +475,7 @@ class LeagueView:
             manager = self.caller(caller_handle, links or {})
             if manager is None:
                 raise NameNotFound(
-                    "I do not know which Sleeper account is yours. "
-                    "Use !link <sleeper username>, or set SLEEPER_USER_MAP."
+                    "I do not know your Sleeper account.\nUse !link <your name>."
                 )
             return manager
 
@@ -538,8 +584,7 @@ def load_view(
     """Build the joined view. Two to four cached API calls."""
     if not league_id:
         raise SleeperNotConfigured(
-            "No Sleeper league is configured. Set SLEEPER_LEAGUE_ID in .env — "
-            "find it with: python bot.py sleeper leagues <your sleeper username>"
+            "No Sleeper league configured.\nSet SLEEPER_LEAGUE_ID in .env."
         )
 
     league, effective_id, is_previous = resolve_league_id(
@@ -583,6 +628,8 @@ def load_view(
             waiver_budget_used=int(settings.get("waiver_budget_used") or 0),
             total_moves=int(settings.get("total_moves") or 0),
         )
+
+    disambiguate_short_names(managers)
 
     # The week to display. A finished league shows its final week; a live one
     # follows /state/nfl, clamped into the league's own season.

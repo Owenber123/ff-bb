@@ -106,13 +106,14 @@ def test_fit_returns_everything_when_it_is_short():
 
 
 def test_fit_drops_whole_lines_rather_than_cutting_words():
-    lines = [f"line {i} " + "x" * 100 for i in range(200)]
+    # Each source line is one long unbreakable token, so the width wrapper
+    # leaves it whole and only the body cap applies.
+    lines = ["x" * 100 for _ in range(200)]
     body = fit(lines, limit=500)
     assert len(body) <= 500
     assert body.endswith("…")
-    # Every retained line is intact.
     for line in body.split("\n")[:-1]:
-        assert line.endswith("x" * 100)
+        assert line == "x" * 100
 
 
 def test_fit_stays_under_the_client_send_cap():
@@ -143,10 +144,14 @@ def test_old_data_is_labelled():
 
 def test_stale_data_says_sleeper_is_down():
     note = freshness(600, stale=True)
-    assert "not responding" in note
+    assert "Sleeper down" in note
     assert "10 min ago" in note
     # Even brand-new-looking stale data must be flagged.
-    assert "not responding" in freshness(5, stale=True)
+    assert "Sleeper down" in freshness(5, stale=True)
+    # And the caveat itself has to fit the budget it is appended to.
+    from ffformat import MAX_LINE, display_width
+
+    assert display_width(note) <= MAX_LINE
 
 
 # ---------------------------------------------------------------------------

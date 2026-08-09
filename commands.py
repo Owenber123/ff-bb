@@ -84,10 +84,13 @@ HELP_GROUPS: dict[str, tuple[str, ...]] = {
 # during games and the one that makes somebody screenshot it for a friend,
 # and mentions that the rest exist. Everything still works; only the shop
 # window changed.
-HEADLINE_COMMANDS: tuple[tuple[str, str], ...] = (
-    ("scores", "live scoring during games"),
-    ("standings", "the table"),
-    ("roast <name>", "an insult built from their actual season"),
+# Each entry has to fit one bubble line (~30 columns, less the bot prefix on
+# the first), so the blurbs are three words, not a sentence. The emoji is the
+# anchor the eye lands on.
+HEADLINE_COMMANDS: tuple[tuple[str, str, str], ...] = (
+    ("🏈", "scores", "live scores"),
+    ("📊", "standings", "the table"),
+    ("🔥", "roast <name>", ""),
 )
 
 
@@ -100,9 +103,14 @@ def cmd_help(args: str, ctx: CommandContext) -> str:
     prefix = getattr(ctx.config, "command_prefix", "!")
 
     if not args:
-        lines = [f"{prefix}{usage} — {blurb}" for usage, blurb in HEADLINE_COMMANDS]
+        lines = [
+            f"{icon} {prefix}{usage}:  {blurb}" if blurb else f"{icon} {prefix}{usage}"
+            for icon, usage, blurb in HEADLINE_COMMANDS
+        ]
         hidden = len(all_commands()) - len(HEADLINE_COMMANDS)
-        lines.append(f"{prefix}help all for the other {hidden}.")
+        # Kept deliberately: without it nothing points at the other commands,
+        # and the short menu becomes a dead end rather than a front door.
+        lines += ["", f"{prefix}help all for {hidden} more"]
         return "\n".join(lines)
 
     wanted = args.split()[0].lstrip(prefix).lower()

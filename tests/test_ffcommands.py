@@ -77,6 +77,15 @@ def run(env, name, args="", **kwargs) -> str:
     return reply or ""
 
 
+def unwrapped(env, name, args="", **kwargs) -> str:
+    """Reply with the width wrapper's line breaks undone.
+
+    For asserting on *content* rather than layout: replies are wrapped to the
+    ~30-column budget, so a phrase can legitimately span two lines.
+    """
+    return re.sub(r"\n  ", " ", run(env, name, args, **kwargs))
+
+
 # ---------------------------------------------------------------------------
 # the blanket guarantees
 # ---------------------------------------------------------------------------
@@ -152,7 +161,7 @@ def test_commands_taking_a_name_handle_a_stranger(env, name, args):
 
 def test_standings_are_ordered_and_show_a_record(env):
     reply = run(env, "standings")
-    assert reply.index("bloqus") < reply.index("bru32")
+    assert reply.index("bloqus") < reply.index("bru")
     assert "3-1" in reply
     assert "1436.0" in reply  # fpts=1436 + fpts_decimal=5/100
     # The naive f"{fpts}.{fpts_decimal}" join would print 1436.5 here.
@@ -162,7 +171,7 @@ def test_standings_are_ordered_and_show_a_record(env):
 
 def test_toilet_puts_last_place_first(env):
     reply = run(env, "toilet")
-    assert reply.index("bru32") < reply.index("bloqus")
+    assert reply.index("bru") < reply.index("bloqus")
 
 
 def test_matchups_pairs_by_matchup_id(env):
@@ -174,8 +183,8 @@ def test_matchups_pairs_by_matchup_id(env):
         1: [1, 4], 2: [2, 3]
     }
     reply = run(env, "matchups")
-    assert "bloqus vs bloqus2" in reply
-    assert "barryyung vs bru32" in reply
+    assert "bloqus v bloqus2" in reply
+    assert "barryyung v bru" in reply
 
 
 def run_view(env):
@@ -221,10 +230,13 @@ def test_waivers_skips_failed_claims(env):
 
 
 def test_trades_show_both_sides_and_picks(env):
-    reply = run(env, "trades")
+    reply = unwrapped(env, "trades")
     assert "D. Henry" in reply
     assert "B. Robinson" in reply
     assert "2026 R1" in reply
+    # Each side on its own line, so no name is split across a wrap.
+    assert "bloqus +D. Henry, 2026 R1" in reply
+    assert "barryyung +B. Robinson" in reply
 
 
 def test_injuries_are_limited_to_rostered_players(env):
@@ -340,7 +352,7 @@ def test_a_nickname_persists_and_is_used_everywhere(env, tmp_path):
 
 
 def test_a_multi_word_target_still_leaves_a_nickname(env):
-    reply = run(env, "nickname", "Go Birds The Bird Man")
+    reply = unwrapped(env, "nickname", "Go Birds The Bird Man")
     assert "The Bird Man" in reply
 
 
@@ -374,7 +386,7 @@ def test_fines_accumulate_and_show_up_in_the_pot(env):
 
 
 def test_a_fine_with_a_multi_word_name_and_reason(env):
-    reply = run(env, "fine", "Go Birds 10 for the whole vibe")
+    reply = unwrapped(env, "fine", "Go Birds 10 for the whole vibe")
     assert "$10" in reply
     assert "for the whole vibe" in reply
 
@@ -496,13 +508,15 @@ def test_help_advertises_exactly_three_commands(env):
 
     reply = run(env, "help")
     lines = reply.strip().split("\n")
-    assert len(lines) == 4  # three commands plus the pointer at everything else
-    assert lines[0].startswith("!scores")
-    assert lines[1].startswith("!standings")
-    assert lines[2].startswith("!roast")
-    assert "help all" in lines[3]
-    # The whole point: short enough that somebody actually reads it.
-    assert len(reply) < 220
+    assert len(lines) == 5  # three commands, a blank, and the pointer
+    assert "!scores" in lines[0]
+    assert "!standings" in lines[1]
+    assert "!roast" in lines[2]
+    assert lines[3] == ""
+    assert "help all" in lines[4]
+    # The whole point: short enough that somebody actually reads it, and no
+    # line so long it wraps into more than the four.
+    assert len(reply) < 160
 
 
 def test_help_does_not_leak_the_other_commands(env):
@@ -529,7 +543,7 @@ def test_the_advertised_count_matches_reality(env):
     import commands  # noqa: F401
 
     reply = run(env, "help")
-    claimed = int(re.search(r"other (\d+)", reply).group(1))
+    claimed = int(re.search(r"for (\d+) more", reply).group(1))
     listed = len([line for line in run(env, "help", "all").split("\n") if ":" in line])
     assert claimed == len(all_commands()) - 3
     assert listed >= 4  # sections actually rendered
@@ -538,7 +552,7 @@ def test_the_advertised_count_matches_reality(env):
 def test_help_section_expands_with_descriptions(env):
     import commands  # noqa: F401
 
-    reply = run(env, "help", "fantasy")
+    reply = unwrapped(env, "help", "fantasy")
     assert "!standings" in reply
     assert "Record, points for" in reply
 

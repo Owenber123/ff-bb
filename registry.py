@@ -39,6 +39,11 @@ class CommandContext:
     is_group: bool
     command: str  # the matched command name (canonical, not the alias used)
     message_guid: str = ""
+    # Optional header title. A handler may set this to something more useful
+    # than its own name ("scores wk17"); the send path falls back to the
+    # command name when it is empty. Keep it short -- the prefix eats about
+    # half the header line.
+    title: str = ""
     client: object = None  # BlueBubblesClient
     config: object = None  # Config
     history: object = None  # ChatHistory
@@ -180,4 +185,16 @@ def dispatch(name: str, args: str, ctx: CommandContext) -> str | None:
             extra={"fields": {"command": cmd.name, "type": type(reply).__name__}},
         )
         reply = str(reply)
-    return reply.strip() or None
+
+    reply = reply.strip()
+    if not reply:
+        return None
+
+    # The line-width budget, applied once at the command boundary so that what
+    # a handler returns is what the phone actually shows -- logs, !preview and
+    # tests all see the same thing. A handler is free to write prose; it does
+    # not have to know that an iMessage bubble is ~30 columns wide. The send
+    # path applies the same rule again after stamping the bot prefix.
+    from ffformat import enforce_width
+
+    return enforce_width(reply)

@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable, Iterator
 import requests
 
 from echo_guard import apply_bot_prefix
+from ffformat import compose_message, enforce_width
 from logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -149,10 +150,15 @@ class BlueBubblesClient:
         body = self._request("GET", "ping")
         return body if isinstance(body, dict) else {"data": body}
 
-    def send_text(self, chat_guid: str, message: str) -> dict[str, Any]:
+    def send_text(self, chat_guid: str, message: str, title: str = "") -> dict[str, Any]:
         """POST /api/v1/message/text.
 
         Serialised and rate limited: each send is ~800ms of AppleScript.
+
+        With a ``title``, the message is composed in the house style -- a
+        ``🤖 bloqBot - <title>`` header on its own line, a blank line, then the
+        body. Without one it falls back to stamping the prefix inline, which
+        keeps any caller that has not been taught about titles working.
         """
         text = (message or "").strip()
         if not text:
@@ -160,7 +166,19 @@ class BlueBubblesClient:
 
         # Once per message, at the top -- not per line. Applied here so that
         # command replies, error replies and the weekly summary all get it.
-        text = apply_bot_prefix(text, self.bot_prefix)
+        if title and self.bot_prefix:
+            text = compose_message(self.bot_prefix, title, text)
+        else:
+            text = apply_bot_prefix(text, self.bot_prefix)
+
+        # The line-width backstop, applied AFTER the prefix so the prefix counts
+        # against the first line's budget rather than silently blowing it. This
+        # is the one choke point every outgoing message passes through, so
+        # nothing -- including anything added later -- can put a wall of text on
+        # somebody's phone. Words longer than the budget (chat GUIDs, URLs) are
+        # left whole; see ffformat.wrap_line.
+        text = enforce_width(text)
+
         if len(text) > MAX_MESSAGE_CHARS:
             text = text[: MAX_MESSAGE_CHARS - 3] + "..."
 

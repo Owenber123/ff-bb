@@ -28,6 +28,7 @@ import ffposts
 import ffroast
 from ffformat import (
     DOT,
+    MAX_LINE,
     fit,
     money,
     normalize_handle,
@@ -36,6 +37,8 @@ from ffformat import (
     plural,
     pts,
     rank_marker,
+    score_line,
+    short_name,
     signed,
     strip_mention,
     truncate,
@@ -138,10 +141,7 @@ def league_command(*, needs_games: bool = True) -> Callable:
                 return f"Sleeper is not responding right now. ({exc})"
 
             if needs_games and not view.has_games:
-                return (
-                    f"{view.name} has not drafted yet — there is nothing to show. "
-                    f"Try again once the season starts."
-                )
+                return "Not drafted yet — nothing to show."
 
             try:
                 return fn(args, ctx, view)
@@ -158,11 +158,20 @@ def league_command(*, needs_games: bool = True) -> Callable:
     return decorator
 
 
-def _header(view: LeagueView, title: str) -> str:
-    line = f"🏈 {truncate(view.name, 28)}{DOT}{title}"
+def _head(ctx: CommandContext, view: LeagueView, title: str) -> list[str]:
+    """Set the message header title, and return any body preamble.
+
+    The title goes in the ``🤖 bloqBot - <title>`` header line that the send
+    path composes, so it must not be repeated in the body. Titles are short
+    identifiers, not sentences -- the prefix eats about half the header line.
+
+    Returns a list so a caller can splice it in: empty most of the time, one
+    caveat line when the data is last season's.
+    """
+    ctx.title = title
     if view.is_previous_season:
-        line += f"\n(showing {view.season} — this season has not drafted)"
-    return line
+        return [f"({view.season} — not yet drafted)", ""]
+    return []
 
 
 def _me(ctx: CommandContext, view: LeagueView) -> Manager | None:
@@ -219,12 +228,12 @@ def _seeded(text: str) -> random.Random:
 @league_command()
 def cmd_standings(args: str, ctx: CommandContext, view: LeagueView) -> str:
     results = view.season_results()
-    lines = [_header(view, "Standings")]
+    lines = _head(ctx, view, f"standings wk{view.week}")
     for i, manager in enumerate(view.sorted_managers()):
         run = streak(results.get(manager.roster_id, []))
         lines.append(
-            f"{rank_marker(i)} {truncate(manager.name, 16)}{DOT}{manager.record}"
-            f"{DOT}{pts(manager.fpts)} PF{DOT}{run}"
+            f"{rank_marker(i)} {manager.short} {manager.record}"
+            f" {pts(manager.fpts)} {run}"
         )
     return with_freshness(fit(lines), view.age, view.stale)
 
@@ -234,12 +243,12 @@ def cmd_standings(args: str, ctx: CommandContext, view: LeagueView) -> str:
 def cmd_toilet(args: str, ctx: CommandContext, view: LeagueView) -> str:
     ranked = view.sorted_managers()
     total = len(ranked)
-    lines = [_header(view, "Toilet bowl 🚽")]
+    lines = _head(ctx, view, "toilet") + ["🚽 Bottom up"]
     for offset, manager in enumerate(reversed(ranked)):
         place = total - offset
         marker = "💩" if offset == 0 else f"{ordinal(place)}"
         lines.append(
-            f"{marker} {truncate(manager.name, 16)}{DOT}{manager.record}{DOT}{pts(manager.fpts)} PF"
+            f"{marker} {manager.short} {manager.record} {pts(manager.fpts)}"
         )
     return with_freshness(fit(lines), view.age, view.stale)
 
@@ -254,14 +263,14 @@ def cmd_matchups(args: str, ctx: CommandContext, view: LeagueView) -> str:
     if not matchups:
         return f"No matchups posted for week {week} yet."
 
-    lines = [_header(view, f"Week {week} matchups")]
+    lines = _head(ctx, view, f"matchups wk{week}")
     for matchup in matchups:
         if not matchup.complete:
             only = matchup.sides[0]
-            lines.append(f"• {truncate(only.name, 18)}{DOT}no opponent")
+            lines.append(f"{only.short}{DOT}no opponent")
             continue
         a, b = matchup.sides
-        lines.append(f"• {truncate(a.name, 16)} vs {truncate(b.name, 16)}")
+        lines.append(f"{a.short} v {b.short}")
     return with_freshness(fit(lines), age, stale)
 
 
@@ -272,20 +281,14 @@ def cmd_scores(args: str, ctx: CommandContext, view: LeagueView) -> str:
     if not matchups:
         return f"Nothing scored in week {week} yet."
 
-    lines = [_header(view, f"Week {week} scores")]
+    lines = _head(ctx, view, f"scores wk{week}")
     for matchup in sorted(matchups, key=lambda m: -m.total):
         if not matchup.complete:
             only = matchup.sides[0]
-            lines.append(f"{truncate(only.name, 16)} {pts(only.points)}")
+            lines.append(f"{only.short} {pts(only.points)}")
             continue
         high, low = matchup.ordered()
-        lead = high.points - low.points
-        marker = "🔒" if view.is_week_final(week) else ""
-        lines.append(
-            f"{truncate(high.name, 14)} {pts(high.points)}{DOT}"
-            f"{truncate(low.name, 14)} {pts(low.points)}"
-            + (f"  (+{pts(lead)}){marker}" if lead else "  (tied)")
-        )
+        lines.append(score_line(high.short, high.points, low.short, low.points))
 
     # The caveat is the point: say the scores are minutes old rather than
     # implying they are live.
@@ -321,7 +324,7 @@ def cmd_roster(args: str, ctx: CommandContext, view: LeagueView) -> str:
         return f"{manager.name} has no lineup set."
 
     slots = view.starting_slots
-    lines = [_header(view, f"{manager.name}{DOT}week {week}")]
+    lines = _head(ctx, view, f"{manager.short} wk{week}")
 
     # The cached player file holds *today's* team and injury status. Painting
     # those onto a finished season's lineup produces confident nonsense
@@ -383,7 +386,7 @@ def cmd_waivers(args: str, ctx: CommandContext, view: LeagueView) -> str:
             if not parts:
                 continue
             cost = f" (${bid})" if bid else ""
-            moves.append(f"{truncate(who, 14)}{DOT}{' '.join(parts)}{cost}")
+            moves.append(f"{short_name(who)}{DOT}{' '.join(parts)}{cost}")
         if len(moves) >= 8:
             break
 
@@ -391,7 +394,7 @@ def cmd_waivers(args: str, ctx: CommandContext, view: LeagueView) -> str:
         span = f"week {weeks_seen[0]}" if len(weeks_seen) == 1 else f"weeks {weeks_seen[-1]}-{weeks_seen[0]}"
         return f"No completed adds or drops in {span}."
 
-    lines = [_header(view, "Recent moves")] + moves[:8]
+    lines = _head(ctx, view, "waivers") + moves[:8]
     return fit(lines)
 
 
@@ -430,22 +433,26 @@ def cmd_trades(args: str, ctx: CommandContext, view: LeagueView) -> str:
             if not by_roster:
                 continue
 
-            sides = []
+            # One side per line. As a single "A gets X | B gets Y" sentence
+            # this wrapped across three lines and split a player's name in
+            # half, which is exactly what the budget exists to prevent.
+            flag = " ⏳" if status == "pending" else ""
+            entries.append(f"wk{week}{flag}")
             for roster_id, items in by_roster.items():
                 manager = view.managers.get(roster_id)
                 got = ", ".join(
                     item.split("pick:")[1] if item.startswith("pick:") else client.player_name(item, short=True)
-                    for item in items[:3]
+                    for item in items[:2]
                 )
-                sides.append(f"{truncate(manager.name if manager else f'R{roster_id}', 12)} gets {got}")
-            flag = " ⏳pending" if status == "pending" else ""
-            entries.append(f"wk{week}{DOT}" + " | ".join(sides) + flag)
-        if len(entries) >= 5:
+                label = manager.short if manager else f"R{roster_id}"
+                entries.append(f"{label} +{got}")
+            entries.append("")
+        if len(entries) >= 9:
             break
 
     if not entries:
-        return f"No trades in the last {MAX_TRANSACTION_WEEKS} weeks. Cowards."
-    return fit([_header(view, "Trades")] + entries[:5])
+        return f"No trades in {MAX_TRANSACTION_WEEKS} weeks. Cowards."
+    return fit(_head(ctx, view, "trades") + entries)
 
 
 @command("injuries", help="Injury report, rostered players only.", aliases=("inj", "ir"), category=LEAGUE)
@@ -479,11 +486,12 @@ def cmd_injuries(args: str, ctx: CommandContext, view: LeagueView) -> str:
             hurt.append((rank, f"{marker}{client.player_name(player_id, short=True)} {status}"))
         if hurt:
             hurt.sort()
-            rows.append((len(hurt), f"{truncate(manager.name, 14)}{DOT}" + ", ".join(h[1] for h in hurt[:4])))
+            for _, entry in hurt[:3]:
+                rows.append((len(hurt), f"{manager.short}{DOT}{entry}"))
 
     if not rows:
         return "Nobody rostered is on the injury report. Suspicious."
-    lines = [_header(view, "Injury report"), "(▶ = currently starting)"]
+    lines = _head(ctx, view, "injuries") + ["(▶ = starting)", ""]
     lines.extend(text for _, text in rows)
     return fit(lines, note="more not shown")
 
@@ -500,7 +508,7 @@ def cmd_bye(args: str, ctx: CommandContext, view: LeagueView) -> str:
     if not on_bye:
         return f"No teams on bye in week {week} of {view.season}."
 
-    lines = [_header(view, f"Week {week} byes"), "Teams: " + ", ".join(sorted(on_bye))]
+    lines = _head(ctx, view, f"byes wk{week}") + ["Teams: " + ", ".join(sorted(on_bye)), ""]
 
     # Per-manager counts need player -> NFL team, which is current-day data.
     # Against a finished season's rosters it would be wrong often enough to be
@@ -519,7 +527,7 @@ def cmd_bye(args: str, ctx: CommandContext, view: LeagueView) -> str:
         note = f"{len(affected)} out"
         if starting:
             note += f", {len(starting)} STARTING ⚠️"
-        hits.append((len(starting) * 100 + len(affected), f"{truncate(manager.name, 14)}{DOT}{note}"))
+        hits.append((len(starting) * 100 + len(affected), f"{manager.short}{DOT}{note}"))
 
     if hits:
         hits.sort(reverse=True)
@@ -539,7 +547,7 @@ def cmd_playoffs(args: str, ctx: CommandContext, view: LeagueView) -> str:
         except SleeperError:
             bracket = []
         if bracket:
-            lines = [_header(view, "Playoff bracket")]
+            lines = _head(ctx, view, "bracket")
             for game in sorted(bracket, key=lambda g: (g.get("r") or 0, g.get("m") or 0)):
                 one = _bracket_team(view, game.get("t1"), game.get("t1_from"))
                 two = _bracket_team(view, game.get("t2"), game.get("t2_from"))
@@ -548,11 +556,11 @@ def cmd_playoffs(args: str, ctx: CommandContext, view: LeagueView) -> str:
                 label = f"R{game.get('r')}"
                 if place:
                     label += f" ({ordinal(int(place))} place)"
-                result = f" → {truncate(winner.name, 14)}" if winner else ""
+                result = f" → {winner.short}" if winner else ""
                 lines.append(f"{label}{DOT}{one} vs {two}{result}")
             return fit(lines)
 
-    lines = [_header(view, f"Playoff picture (top {spots})")]
+    lines = _head(ctx, view, "playoffs") + [f"Top {spots} make it", ""]
     for i, manager in enumerate(ranked):
         if i == spots:
             lines.append("— cut line —")
@@ -563,7 +571,7 @@ def cmd_playoffs(args: str, ctx: CommandContext, view: LeagueView) -> str:
             behind = bubble.wins - manager.wins
             if behind > 0:
                 gap = f"{DOT}{behind} back"
-        lines.append(f"{marker} {truncate(manager.name, 16)}{DOT}{manager.record}{gap}")
+        lines.append(f"{marker} {manager.short} {manager.record}{gap}")
     lines.append(f"Playoffs start week {view.playoff_week_start}")
     return with_freshness(fit(lines), view.age, view.stale)
 
@@ -572,7 +580,7 @@ def _bracket_team(view: LeagueView, value, source) -> str:
     """Bracket slots hold a roster_id, or a {'w': m} / {'l': m} placeholder."""
     if isinstance(value, int):
         manager = view.managers.get(value)
-        return truncate(manager.name, 14) if manager else f"R{value}"
+        return manager.short if manager else f"R{value}"
     if isinstance(source, dict):
         if "w" in source:
             return f"W of m{source['w']}"
@@ -587,10 +595,7 @@ def cmd_record(args: str, ctx: CommandContext, view: LeagueView) -> str:
     them = _resolve(args, ctx, view)
     me = _me(ctx, view)
     if me is None:
-        return (
-            "I do not know which Sleeper account is yours, so there is no "
-            "'head to head' to show. Use !link <sleeper username>."
-        )
+        return "I do not know your Sleeper account.\nUse !link <your name>."
     if me.roster_id == them.roster_id:
         return f"{me.name} is undefeated against {me.name}."
 
@@ -600,7 +605,8 @@ def cmd_record(args: str, ctx: CommandContext, view: LeagueView) -> str:
         return f"{me.name} and {them.name} have not played this season."
 
     lines = [
-        _header(view, f"{me.name} vs {them.name}"),
+        *_head(ctx, view, "record"),
+        f"{me.short} v {them.short}",
         f"{me.name} leads {wins}-{losses}" if wins > losses else
         f"{them.name} leads {losses}-{wins}" if losses > wins else
         f"Dead even at {wins}-{losses}",
@@ -676,14 +682,17 @@ def cmd_bench(args: str, ctx: CommandContext, view: LeagueView) -> str:
                 (score, pid) for _, pid, score in lineup if pid not in started and score > 0
             ]
             missed.sort(reverse=True)
-            worst = f" ({client.player_name(missed[0][1], short=True)} {pts(missed[0][0])})" if missed else ""
-            rows.append((left, f"{truncate(side.name, 14)}{DOT}{pts(left)} left{worst}"))
+            # The benched player's own score is dropped: naming who should
+            # have played is the interesting half, and keeping both put this
+            # line eight columns over budget.
+            worst = f"{DOT}{client.player_name(missed[0][1], short=True)}" if missed else ""
+            rows.append((left, f"{side.short} {pts(left)}{worst}"))
 
     if not rows:
         return f"Nobody left anything on the bench in week {week}. Suspicious."
 
     rows.sort(reverse=True)
-    lines = [_header(view, f"Week {week} bench points")]
+    lines = _head(ctx, view, f"bench wk{week}")
     lines.extend(text for _, text in rows[:10])
     return with_freshness(fit(lines), age, stale)
 
@@ -707,11 +716,11 @@ def cmd_luckiest(args: str, ctx: CommandContext, view: LeagueView) -> str:
     table = _luck_table(view)
     if not table:
         return "Not enough games played to judge anybody's luck."
-    lines = [_header(view, "Luckiest"), "(actual wins vs wins earned against the whole league)"]
+    lines = _head(ctx, view, "luckiest") + ["actual W vs earned W", ""]
     for i, (delta, manager, expected) in enumerate(table[:5]):
         lines.append(
-            f"{rank_marker(i)} {truncate(manager.name, 16)}{DOT}{manager.wins}W "
-            f"vs {expected:.1f} earned{DOT}{signed(delta)}"
+            f"{rank_marker(i)} {manager.short} {manager.wins}W"
+            f" vs {expected:.1f} {signed(delta)}"
         )
     return fit(lines)
 
@@ -722,11 +731,11 @@ def cmd_unluckiest(args: str, ctx: CommandContext, view: LeagueView) -> str:
     table = _luck_table(view)
     if not table:
         return "Not enough games played to judge anybody's luck."
-    lines = [_header(view, "Unluckiest"), "(wins earned against the whole league vs actual)"]
+    lines = _head(ctx, view, "unluckiest") + ["earned W vs actual W", ""]
     for i, (delta, manager, expected) in enumerate(reversed(table[-5:])):
         lines.append(
-            f"{rank_marker(i)} {truncate(manager.name, 16)}{DOT}{expected:.1f} earned "
-            f"vs {manager.wins}W{DOT}{signed(delta)}"
+            f"{rank_marker(i)} {manager.short} {expected:.1f}"
+            f" vs {manager.wins}W {signed(delta)}"
         )
     return fit(lines)
 
@@ -734,16 +743,16 @@ def cmd_unluckiest(args: str, ctx: CommandContext, view: LeagueView) -> str:
 @command("closest", help="Narrowest margin this week.", category=STATS)
 @league_command()
 def cmd_closest(args: str, ctx: CommandContext, view: LeagueView) -> str:
-    return _margin_reply(view, closest=True)
+    return _margin_reply(ctx, view, closest=True)
 
 
 @command("blowout", help="Widest margin this week.", aliases=("beatdown",), category=STATS)
 @league_command()
 def cmd_blowout(args: str, ctx: CommandContext, view: LeagueView) -> str:
-    return _margin_reply(view, closest=False)
+    return _margin_reply(ctx, view, closest=False)
 
 
-def _margin_reply(view: LeagueView, *, closest: bool) -> str:
+def _margin_reply(ctx: CommandContext, view: LeagueView, *, closest: bool) -> str:
     week, matchups, age, stale = _scoring_week(view)
     playable = [m for m in matchups if m.complete and m.total > 0]
     if not playable:
@@ -752,19 +761,17 @@ def _margin_reply(view: LeagueView, *, closest: bool) -> str:
     playable.sort(key=lambda m: m.margin, reverse=not closest)
     pick = playable[0]
     high, low = pick.ordered()
-    title = "Closest game" if closest else "Biggest beatdown"
     icon = "😬" if closest else "💀"
 
     lines = [
-        _header(view, f"Week {week}{DOT}{title}"),
-        f"{icon} {truncate(high.name, 16)} {pts(high.points)}"
-        f" def. {truncate(low.name, 16)} {pts(low.points)}",
-        f"Margin: {pts(pick.margin)}",
+        *_head(ctx, view, ("closest" if closest else "blowout") + f" wk{week}"),
+        icon + " " + score_line(high.short, high.points, low.short, low.points, budget=MAX_LINE - 2),
+        f"Margin {pts(pick.margin)}",
     ]
     if len(playable) > 1:
         runner = playable[1]
         a, b = runner.ordered()
-        lines.append(f"Next: {truncate(a.name, 12)} / {truncate(b.name, 12)} by {pts(runner.margin)}")
+        lines.append(f"Next {a.short} / {b.short} by {pts(runner.margin)}")
     return with_freshness(fit(lines), age, stale)
 
 
@@ -779,16 +786,16 @@ def cmd_shame(args: str, ctx: CommandContext, view: LeagueView) -> str:
     sides.sort(key=lambda s: s.points)
     worst = sides[0]
     lines = [
-        _header(view, f"Week {week}{DOT}Wall of shame"),
+        *_head(ctx, view, f"shame wk{week}"),
         f"🗑️ {worst.name}{DOT}{pts(worst.points)}",
     ]
     for other in sides[1:3]:
-        lines.append(f"   {truncate(other.name, 16)}{DOT}{pts(other.points)}")
+        lines.append(f"{other.short}{DOT}{pts(other.points)}")
 
     started = worst.started()
     if started:
         low = min(started, key=lambda pair: pair[1])
-        lines.append(f"Chief architect: {view.client.player_name(low[0], short=True)} ({pts(low[1])})")
+        lines.append(f"Architect: {view.client.player_name(low[0], short=True)} {pts(low[1])}")
     return with_freshness(fit(lines), age, stale)
 
 
@@ -807,11 +814,11 @@ def cmd_top(args: str, ctx: CommandContext, view: LeagueView) -> str:
         return f"Nothing scored in week {week} yet."
 
     entries.sort(reverse=True)
-    lines = [_header(view, f"Week {week}{DOT}Top starters")]
+    lines = _head(ctx, view, f"top wk{week}")
     for i, (score, pid, owner) in enumerate(entries[:8]):
         lines.append(
             f"{rank_marker(i)} {truncate(client.player_name(pid, short=True), 18)}"
-            f"{DOT}{pts(score)}{DOT}{truncate(owner, 12)}"
+            f" {pts(score)} {short_name(owner)}"
         )
     return with_freshness(fit(lines), age, stale)
 
@@ -1027,8 +1034,8 @@ def cmd_fines(args: str, ctx: CommandContext, view: LeagueView) -> str:
         rows.append((cents, manager.name if manager else user_id))
     rows.sort(reverse=True)
 
-    lines = [_header(view, "Fines")]
-    lines.extend(f"{truncate(name, 18)}{DOT}{money(cents)}" for cents, name in rows)
+    lines = _head(ctx, view, "fines")
+    lines.extend(f"{short_name(name)}{DOT}{money(cents)}" for cents, name in rows)
     lines.append(f"Total: {money(sum(totals.values()))} across {store.fine_count()} fines")
 
     recent = store.recent_fines(limit=3)
@@ -1037,7 +1044,8 @@ def cmd_fines(args: str, ctx: CommandContext, view: LeagueView) -> str:
         for fine in recent:
             manager = view.by_user(fine.user_id)
             who = manager.name if manager else fine.user_id
-            lines.append(f"  {truncate(who, 12)} {money(fine.cents)} — {truncate(fine.reason, 40)}")
+            lines.append(f"{short_name(who)} {money(fine.cents)}")
+            lines.append(f"  {truncate(fine.reason, 26)}")
     return fit(lines)
 
 
@@ -1060,7 +1068,7 @@ def cmd_pot(args: str, ctx: CommandContext, view: LeagueView) -> str:
     fines_total = sum(store.fine_totals().values())
     teams = len(view.managers)
 
-    lines = [_header(view, "The pot")]
+    lines = _head(ctx, view, "pot")
     if buyin:
         lines.append(f"Buy-ins: {teams} × {money(buyin)} = {money(buyin * teams)}")
     else:
@@ -1198,7 +1206,7 @@ def cmd_link(args: str, ctx: CommandContext, view: LeagueView) -> str:
 
     manager = view.resolve(strip_mention(args), caller_handle=handle, links=_links(ctx))
     _store(ctx).set_link(handle, manager.user_id)
-    return f"🔗 Linked you to {manager.formal_name}. !roast me now works."
+    return f"🔗 Linked to {manager.formal_name}.\n!roast me now works."
 
 
 @command(
@@ -1210,34 +1218,43 @@ def cmd_link(args: str, ctx: CommandContext, view: LeagueView) -> str:
 @league_command()
 def cmd_preview(args: str, ctx: CommandContext, view: LeagueView) -> str:
     """Testing a Monday-night post by waiting until Monday night is not workable."""
-    kind = args.strip().lower().split()[0] if args.strip() else ""
+    tokens = args.strip().lower().split()
+    wide = any(t in ("--wide", "-w", "wide", "--width") for t in tokens)
+    tokens = [t for t in tokens if not t.startswith("-") and t not in ("wide", "width")]
+    kind = tokens[0] if tokens else ""
 
     if kind not in ffposts.POST_TYPES:
-        lines = ["Preview a scheduled post:"]
-        for key in ffposts.POST_ORDER:
-            post = ffposts.POST_TYPES[key]
-            lines.append(f"  !preview {key}{DOT}{post.label}{DOT}{post.when}")
+        ctx.title = "preview"
+        lines = [f"!preview {key}" for key in ffposts.POST_ORDER]
+        lines += ["", "Add --wide for line widths."]
         return "\n".join(lines)
 
     week = view.week
-    rest = args.strip().split()
-    if len(rest) > 1 and rest[1].isdigit():
-        week = max(1, min(int(rest[1]), 18))
+    if len(tokens) > 1 and tokens[1].isdigit():
+        week = max(1, min(int(tokens[1]), 18))
 
     text = ffposts.build(kind, view, week)
     if not text:
         # Not a failure. The silence rule is the feature being demonstrated.
         return (
-            f"[{ffposts.POST_TYPES[kind].label}, week {week}] would post nothing — "
-            f"no data, or nothing worth saying. That is deliberate."
+            f"{ffposts.POST_TYPES[kind].label} wk {week}:\n"
+            f"nothing would post.\nThat is deliberate."
         )
 
-    note = ""
+    if wide:
+        ctx.title = f"widths {kind}"
+        return ffposts.width_report(text)
+
+    # No preview marker at all: the reply's own header is composed from this
+    # title, so what comes back is byte-identical to what the scheduler would
+    # post. Anything else and you are previewing a slightly different message
+    # than the one that goes out.
+    ctx.title = ffposts.post_title(kind, week)
     if view.is_previous_season and kind == "lineups":
         # Bye and injury data are current-day; against a finished season they
         # are a formatting preview, not a real warning.
-        note = "\n(preview only: byes and injuries are current, the lineups are last season's)"
-    return f"[preview{DOT}{ffposts.POST_TYPES[kind].label}{DOT}week {week}]\n{text}{note}"
+        text += "\n\n(byes/injuries are current)"
+    return text
 
 
 @command("posts", help="Scheduled post status.", hidden=True, category=ADMIN)

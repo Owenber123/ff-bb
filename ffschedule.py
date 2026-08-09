@@ -154,7 +154,7 @@ class Scheduler:
 
     # -- the send seam -------------------------------------------------------
 
-    def publish(self, text: str, kind: str) -> bool:
+    def publish(self, text: str, kind: str, title: str = "") -> bool:
         """The single place a scheduled message leaves the process.
 
         Rate limiting, cooldowns and a quiet-hours mute are out of scope for
@@ -168,7 +168,7 @@ class Scheduler:
             )
             return True
         try:
-            self.bb.send_text(self.chat, text)
+            self.bb.send_text(self.chat, text, title=title or kind)
             return True
         except Exception as exc:
             log.error(
@@ -317,7 +317,7 @@ class Scheduler:
             # Recorded before sending. A crash between the two loses one post;
             # the other order risks posting the same thing every five minutes.
             self.store.mark_posted(view.season, view.week, kind)
-            if self.publish(text, kind):
+            if self.publish(text, kind, ffposts.post_title(kind, view.week)):
                 log.info(
                     "scheduled post sent",
                     extra={"fields": {"kind": kind, "week": view.week, "chars": len(text)}},

@@ -6,7 +6,7 @@ commands typed from that Apple ID, so ``isFromMe`` alone cannot be the
 discriminator. Three layers, checked in this order by ``app.process_event``:
 
   1. **Bot prefix, regardless of sender.** Every outgoing message is stamped
-     with ``BB_BOT_PREFIX`` (default ``bloq-bot: ``) at the send choke point, so
+     with ``BB_BOT_PREFIX`` (default ``🤖 ``) at the send choke point, so
      anything arriving with that prefix is machine-generated and is dropped.
      This also makes automated messages visible to everyone in the chat, and it
      pushes the command prefix into mid-string, where ``parse_command`` will not
@@ -20,7 +20,8 @@ discriminator. Three layers, checked in this order by ``app.process_event``:
      sent and rejects an ``isFromMe`` message that matches.
 
 Layer 3 earns its place because layer 1 depends on a *visible, typeable* string:
-a person can type "bloq-bot: !ping" by hand, and a relay, quote, or a second bot
+a person can type the prefix by hand -- and with an emoji prefix that is not
+even far-fetched -- and a relay, quote, or a second bot
 instance can alter or drop the prefix in transit. So layer 3 deliberately
 compares with the bot prefix normalised **away** — it must not share layer 1's
 assumption that the prefix arrives intact.
@@ -68,7 +69,8 @@ def has_bot_prefix(text: str, bot_prefix: str) -> bool:
     """True when ``text`` looks machine-generated.
 
     Compares against the whitespace-stripped prefix and case-insensitively, so
-    ``bloq-bot:pong``, ``bloq-bot: pong`` and ``BLOQ-BOT: pong`` all match. An
+    ``🤖pong``, ``🤖 pong`` and (for a text prefix) ``BOT: pong`` all
+    match. An
     empty ``bot_prefix`` disables the layer entirely -- without this guard every
     string would "start with" the empty prefix and nothing would ever be
     processed.

@@ -9,15 +9,16 @@ Guard order in ``process_event`` is deliberate:
 
   1. event type is new-message
   2. payload parses
-  3. not a duplicate delivery (webhook redelivery)
-  4. chat is on the allowlist
-  5. **loop guards** -- see echo_guard.py for why there are three:
+  3. recent enough to be live traffic, not a replay of history
+  4. not a duplicate delivery (webhook redelivery)
+  5. chat is on the allowlist
+  6. **loop guards** -- see echo_guard.py for why there are three:
        a. anything carrying the bot prefix, whoever sent it
        b. isFromMe *without* the command prefix (own chatter, not a command;
           isFromMe *with* the prefix is the operator commanding from their own
           device, and is processed)
        c. text matching something we recently sent
-  6. text is actually a command
+  7. text is actually a command
 """
 
 from __future__ import annotations
@@ -45,6 +46,22 @@ log = get_logger(__name__)
 
 QUEUE_MAXSIZE = 500
 DEDUPE_SIZE = 1000
+
+
+def is_stale(date_created: int | None, max_age_seconds: float, now: float | None = None) -> bool:
+    """True when a message is too old to be live traffic.
+
+    ``date_created`` is epoch milliseconds, as BlueBubbles sends it.
+
+    Fails open on anything it cannot judge -- a disabled window, a payload with
+    no timestamp, or a clock that puts the message in the future. Ignoring a
+    real command is worse than answering a stale one, so an unknown age counts
+    as fresh.
+    """
+    if max_age_seconds <= 0 or not date_created:
+        return False
+    now = time.time() if now is None else now
+    return (now - date_created / 1000.0) > max_age_seconds
 
 
 class Dispatcher:
@@ -76,6 +93,7 @@ class Dispatcher:
             "dropped_own_echo": 0,
             "dropped_not_allowed": 0,
             "dropped_duplicate": 0,
+            "dropped_stale": 0,
             "dropped_unparsed": 0,
             "commands_from_me": 0,
             "commands_run": 0,
@@ -167,6 +185,28 @@ class Dispatcher:
             },
         )
 
+        # --- Replay guard. After the Messages socket reconnects, the
+        # BlueBubbles server rolls its watermark back and re-announces hours of
+        # history as new-message events. The GUID cache below catches that only
+        # while the process that first saw them is still alive; it lives in
+        # memory, and a restart empties it -- which is exactly when a replay
+        # does damage. The timestamps the server sends are honest even when the
+        # event name is not, so age is the discriminator that survives both.
+        if is_stale(msg.date_created, self.cfg.max_message_age_seconds):
+            self._bump("dropped_stale")
+            log.warning(
+                "dropping a message older than the replay window; the server is "
+                "re-announcing history as new",
+                extra={
+                    "fields": {
+                        "chat_guid": msg.chat_guid,
+                        "age_seconds": round(time.time() - (msg.date_created or 0) / 1000.0),
+                        "text": msg.text[:80],
+                    }
+                },
+            )
+            return
+
         if self._is_duplicate(msg.guid):
             self._bump("dropped_duplicate")
             log.debug("ignoring duplicate delivery", extra={"fields": {"guid": msg.guid}})
@@ -254,7 +294,7 @@ class Dispatcher:
                 return
 
         try:
-            self.client.send_text(msg.chat_guid, reply)
+            self.client.send_text(msg.chat_guid, reply, title=ctx.title or ctx.command)
             self._bump("replies_sent")
             self.history.record(msg.chat_guid, "bot", "bot", reply)
         except BlueBubblesError as exc:

@@ -51,8 +51,8 @@ class FakeBB:
     def __init__(self):
         self.sent: list[tuple[str, str]] = []
 
-    def send_text(self, chat, message):
-        self.sent.append((chat, message))
+    def send_text(self, chat, message, title=""):
+        self.sent.append((chat, message, title))
         return {"ok": True}
 
 
@@ -327,7 +327,7 @@ def test_a_send_failure_still_counts_as_posted(sched):
     """Better one missed post than a retry loop hammering a locked Mac."""
     _force(sched, "recap")
 
-    def boom(chat, message):
+    def boom(chat, message, title=""):
         raise RuntimeError("mac is asleep")
 
     sched.bb.send_text = boom

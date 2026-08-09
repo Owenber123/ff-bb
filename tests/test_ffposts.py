@@ -130,7 +130,7 @@ def test_an_empty_starting_slot_is_reported(live):
     # Roster 3 starts ["300", "0", "301", "0"] -- two unfilled slots.
     text = ffposts.build_lineup_check(live, 1)
     assert text is not None
-    assert "bru32" in text
+    assert "bru" in text          # bru32, shortened
     assert "empty" in text
 
 
@@ -164,7 +164,7 @@ def test_the_lineup_post_only_names_people_with_problems(live):
     # lines: "bloqus" is a substring of "bloqus2", who does have a problem.
     named = {line.split(" · ")[0] for line in text.split("\n") if " · " in line}
     assert "bloqus" not in named
-    assert {"bru32", "bloqus2"} <= named
+    assert {"bru", "bloqus2"} <= named
 
 
 def test_stale_data_produces_no_lineup_post(tmp_path):
@@ -193,25 +193,29 @@ def test_stale_data_produces_no_lineup_post(tmp_path):
 def test_sunday_leads_with_the_closest_game(live):
     text = ffposts.build_sunday_update(live, 3)
     assert text is not None
-    lines = text.split("\n")
-    assert "Closest" in lines[1]
+    # The closest game leads the body -- the week is in the message header now,
+    # so the body does not repeat it.
+    head = text.split("\n\n")[0]
+    assert head.startswith("😬 Closest")
     # Week 3's closest is bloqus2 99.0 vs barryyung 100.0 (1.0 apart).
-    assert "99.0" in lines[1] and "100.0" in lines[1]
+    assert "99.0" in head and "100.0" in head
 
 
 def test_sunday_names_a_blowout_when_there_is_one(live):
     text = ffposts.build_sunday_update(live, 3) or ""
     assert "Beatdown" in text
-    assert "bloqus" in text and "bru32" in text
+    assert "bloqus" in text and "bru" in text
 
 
 def test_sunday_says_who_is_winning(live):
-    assert "Up right now" in (ffposts.build_sunday_update(live, 1) or "")
+    assert "Up: " in (ffposts.build_sunday_update(live, 1) or "")
 
 
 def test_sunday_is_short(live):
+    # Blank lines between sections are deliberate -- they cost a line each and
+    # make the bubble scannable. Still nothing like a wall of text.
     text = ffposts.build_sunday_update(live, 1) or ""
-    assert len(text.split("\n")) <= 6
+    assert len(text.split("\n")) <= 10
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +226,10 @@ def test_sunday_is_short(live):
 def test_recap_has_every_required_element(live):
     text = ffposts.build_recap(live, 1)
     assert text is not None
-    assert "Week 1 final" in text
-    assert "def." in text  # final scores
+    # The title lives in the message header ("bloqBot - recap wk1"), not here.
+    assert "Week 1 final" not in text
+    assert "\u203a" in text  # score separator, far cheaper than " def. "
+    assert "def." not in text
     assert "High" in text
     assert "Low" in text
     assert "Blowout" in text and "Closest" in text
@@ -233,7 +239,7 @@ def test_recap_reports_the_right_high_and_low(live):
     text = ffposts.build_recap(live, 1)
     # Week 1: bloqus2 120.0 high, bru32 80.0 low.
     assert "High 120.0 bloqus2" in text
-    assert "Low 80.0 bru32" in text
+    assert "Low 80.0 bru" in text
 
 
 def test_recap_names_the_worst_bench_decision(live):
@@ -245,7 +251,10 @@ def test_recap_names_the_worst_bench_decision(live):
     assert "Worst call" in text
     assert "S. Barkley" in text
     assert "T. Kelce" in text
-    assert "20.0 lost" in text
+    assert "\u221220.0" in text
+    # Broken across lines on purpose rather than wrapped mid-name.
+    assert "started T. Kelce 20.0" in text
+    assert "over S. Barkley 40.0" in text
 
 
 def test_a_trivial_bench_mistake_is_not_worth_a_line(live):
@@ -256,7 +265,7 @@ def test_a_trivial_bench_mistake_is_not_worth_a_line(live):
 
 def test_recap_lists_every_matchup(live):
     text = ffposts.build_recap(live, 1)
-    for name in ("bloqus", "barryyung", "bru32", "bloqus2"):
+    for name in ("bloqus", "barryyung", "bru", "bloqus2"):
         assert name in text
 
 
@@ -317,7 +326,7 @@ def test_worst_bench_swap_without_player_data(tmp_path):
 def test_week_ahead_lists_the_matchups(live):
     text = ffposts.build_week_ahead(live, 4)
     assert text is not None
-    for name in ("bloqus", "barryyung", "bru32", "bloqus2"):
+    for name in ("bloqus", "barryyung", "bru", "bloqus2"):
         assert name in text
 
 
@@ -329,13 +338,13 @@ def test_week_ahead_picks_a_game_of_the_week(live):
 
 def test_week_ahead_shows_waivers_when_there_are_any(live):
     text = ffposts.build_week_ahead(live, 4)
-    assert "Waivers:" in text
+    assert "Waivers" in text
     assert "P. Nacua" in text
 
 
 def test_week_ahead_omits_the_waiver_block_when_empty(live):
     text = ffposts.build_week_ahead(live, 3) or ""
-    assert "Waivers:" not in text
+    assert "Waivers" not in text
 
 
 def test_week_ahead_ignores_failed_claims(live):

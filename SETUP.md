@@ -165,7 +165,7 @@ Reads still hit the real server, so the whole path is exercised except delivery
 
 ```bash
 BB_DRY_RUN=true .venv/bin/python bot.py summary
-# ... INFO bbclient: DRY RUN: not sending | chat_guid=... message="bloq-bot: Weekly recap ..."
+# ... INFO bbclient: DRY RUN: not sending | chat_guid=... message="🤖 Weekly recap ..."
 ```
 
 ## 4. Register the webhook
@@ -230,7 +230,7 @@ Useful flags: `--days 14`, `--chat <guid>`, `--dry-run`.
 In an allowlisted chat — **including from your own number**, see the loop guards
 below:
 
-- `!ping` → `bloq-bot: pong` within a couple of seconds
+- `!ping` → a `🤖 bloqBot - ping` header, a blank line, then `pong`
 - `!help` → the command list, generated from the registry
 - `!chatinfo` → this chat's GUID
 - `!weather brooklyn` → current conditions
@@ -424,10 +424,12 @@ Waiting until Monday night to test a Monday-night post is not workable.
 ```
 !preview recap            in the chat
 !preview recap 14         a specific week
+!preview recap --wide     line widths, not the post
 ```
 
 ```bash
 python bot.py post render recap --week 14   # print it
+python bot.py post render recap --wide      # line widths
 python bot.py post check                    # what would fire right now, and why
 python bot.py post send recap --chat <guid> # send one by hand
 ```
@@ -462,7 +464,7 @@ message leaves the process — gate it there rather than in the triggers.
 .venv/bin/python -m pytest tests/ -q
 ```
 
-447 tests, no network. Sleeper responses are stubbed at the `requests.Session`
+629 tests, no network. Sleeper responses are stubbed at the `requests.Session`
 level, so the real caching, stale-serving and joins are all exercised. Every
 command is asserted to reply sensibly in three hostile conditions: Sleeper
 down, league empty, and a name that matches nobody.
@@ -482,7 +484,7 @@ three independent layers keep the loop closed. Full rationale is in the
 `echo_guard.py` docstring.
 
 **Layer 1 — the bot prefix.** Every outgoing message is stamped with
-`BB_BOT_PREFIX` (default `bloq-bot: `) at the send choke point, so summaries and
+`BB_BOT_PREFIX` (default `🤖 `) at the send choke point, so summaries and
 error replies get it too, once at the top rather than per line. Incoming
 messages carrying that prefix are dropped regardless of who sent them. This also
 pushes any command prefix into mid-string, where it no longer parses as a
@@ -500,7 +502,7 @@ is altered or stripped somewhere in transit. That independence is the point —
 layer 3 must not assume layer 1 worked. It also matches on message GUID when
 one is available.
 
-Layer 1 is a visible, typeable string, so a person *can* type `bloq-bot: !ping`
+Layer 1 is a visible, typeable string, so a person *can* type `🤖 !ping`
 by hand and have it ignored. That is the trade for making automated messages
 legible to everyone in the chat, and it is why layer 3 exists.
 
@@ -546,9 +548,107 @@ def cmd_mypoints(args: str, ctx: CommandContext, view: LeagueView) -> str:
 drafted, and a name that matched nobody or several people. Pass
 `needs_games=False` if the command still makes sense before the draft.
 
-Read the header of `ffformat.py` before formatting output. The short version:
-iMessage is a **proportional** font, so space-padded columns do not line up —
-separate fields with `DOT` and keep lines short instead.
+Read the header of `ffformat.py` before formatting output. The short version
+is the next section.
+
+---
+
+## Message shape
+
+Every outgoing message is composed the same way:
+
+```
+🤖 bloqBot - scores wk17
+
+TKoop 136.6 › charliema 124.3
+nickelia 117.9 › Ryanmd 114.5
+```
+
+The header is its own line rather than being glued to the front of the first
+content line. That costs two lines and buys three things: the marker is
+unmissable, the body starts at column zero so it lines up with itself, and the
+title says what the message *is* so the body never has to repeat it.
+
+`BB_BOT_PREFIX` is the `🤖 bloqBot - ` part; the title is appended to it.
+`ffformat.compose_message()` does the assembling, and `bbclient.send_text()`
+calls it whenever a `title` is supplied — commands pass `ctx.title or
+ctx.command`, scheduled posts pass `ffposts.post_title(kind, week)`. A caller
+that supplies no title falls back to the old inline stamp, so nothing breaks.
+
+Titles are **short identifiers**, not sentences: the prefix spends 13 of the
+~30 columns, leaving about 17. `scores wk17`, `recap wk14`, `standings wk17`.
+A handler that wants something better than its own command name sets
+`ctx.title`.
+
+Because `!preview` sets `ctx.title` to the post's real title, a previewed post
+is byte-identical to the one the scheduler would send — there is no preview
+marker to account for.
+
+## The line budget
+
+An iMessage bubble fits **roughly 30 characters** at default text size, and the
+font is **proportional**. Those two facts kill the obvious approaches: you
+cannot build columns with spaces (they do not line up, ever) and you cannot
+fix wrapping by padding. The only thing that works is keeping lines short.
+
+So `ffformat.MAX_LINE = 30` is a hard budget, enforced in three places:
+
+| Where | What it does |
+| --- | --- |
+| `fit()` | Every fantasy command and post builds through it. |
+| `dispatch()` | Every command reply, so a handler can write prose without knowing about columns. |
+| `bbclient.send_text()` | Every outgoing message, **after** the bot prefix — so the prefix counts against the first line. |
+
+`display_width()` does the measuring, and counts emoji as 2 columns because
+they are drawn 2 columns wide. `len()` says 🏈 is one character; your phone
+disagrees.
+
+Words longer than the budget — a chat GUID, a URL — are left whole rather than
+broken, because a GUID split across two lines cannot be copied.
+
+### Names
+
+`short_name()` shortens a manager to ≤9 columns, and **everything** renders
+through `Manager.short` / `Side.short` so it is applied consistently:
+
+```
+Diane Danvers Simmons -> Diane        first word of a multi-word name
+Ryanmd211             -> Ryanmd       trailing signup digits
+JubbysGiants          -> Jubbys       camelCase head
+finnmaloney96         -> finnmalon    plain clip, last resort
+```
+
+A single lowercase run like `charliemalone` has no boundary to find and clips
+to `charliema`. If you want `charlie`, that is what `!nickname charliemalone
+charlie` is for — nicknames go through the same shortener, so a long one
+cannot blow the layout out.
+
+Two managers who shorten to the same string (a league with both `bloqus` and
+`bloqus2` really does) are disambiguated at load time by
+`disambiguate_short_names`, because two identical rows is worse than a long
+name.
+
+### Checking it
+
+```
+!preview recap --wide
+python bot.py post render recap --wide
+```
+
+```
+longest 30/30 · 18 lines
+within budget ✅
+
+30  Ryanmd 111.2 › charliema 105.7
+30  barryyun 139.9 › thebigap 76.7
+25  🪑 Worst call · charliema
+16  🏈 Week 14 final
+```
+
+`tests/test_width.py` asserts the budget across every post type and every
+command, rendered against a 12-team league with deliberately awkward data —
+13-character names, three-digit scores, an emoji team name, a name collision,
+and a 36-character nickname. Short fixture names would pass by accident.
 
 Return a string to reply, `None` to stay silent. Raising is safe — dispatch
 logs the traceback and replies with a one-liner; the service stays up and other
