@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from ffformat import DOT, MAX_LINE, SCORE_SEP, fit, pts, score_line, short_name
 from ffleague import SLOT_ELIGIBILITY, LeagueView, Side
 from logging_setup import get_logger
-from sleeper import GAME_FINISHED, is_empty_slot
+from sleeper import is_empty_slot
 
 log = get_logger(__name__)
 
@@ -131,54 +131,6 @@ def worst_bench_swap(view: LeagueView, week: int) -> BenchSwap | None:
     return best
 
 
-def _still_playing(view: LeagueView, week: int) -> int:
-    """Starters whose NFL game has not finished. 0 if we cannot tell."""
-    client = view.client
-    games = client.week_games(view.season, week)
-    if not games:
-        return 0
-    unfinished = {
-        team
-        for game in games
-        if str(game.get("status") or "") not in GAME_FINISHED
-        for team in (game.get("home"), game.get("away"))
-        if team
-    }
-    if not unfinished:
-        return 0
-
-    matchups, _, _ = view.matchups(week)
-    return sum(
-        1
-        for matchup in matchups
-        for side in matchup.sides
-        for pid, _ in side.started()
-        if str(client.player_meta(pid).get("team") or "") in unfinished
-    )
-
-
-def _name_run(prefix: str, names: list[str], budget: int = MAX_LINE) -> str:
-    """``Up: Ryanmd, TKoop +4`` -- as many names as fit, then a count.
-
-    Taking a fixed first three overflows whenever the names are long, which is
-    exactly when it matters.
-    """
-    from ffformat import display_width
-
-    shown: list[str] = []
-    for name in names:
-        candidate = prefix + ", ".join(shown + [name])
-        remaining = len(names) - len(shown) - 1
-        suffix = f" +{remaining}" if remaining else ""
-        if display_width(candidate + suffix) > budget:
-            break
-        shown.append(name)
-    if not shown:
-        shown = names[:1]
-    left = len(names) - len(shown)
-    return prefix + ", ".join(shown) + (f" +{left}" if left else "")
-
-
 def _scored_matchups(view: LeagueView, week: int) -> list:
     matchups, _, _ = view.matchups(week)
     return [m for m in matchups if m.complete and m.total > 0]
@@ -258,7 +210,7 @@ def build_lineup_check(view: LeagueView, week: int | None = None) -> str | None:
 
 
 def build_sunday_update(view: LeagueView, week: int | None = None) -> str | None:
-    """Short. The closest game, the worst beating, who is up, what is left."""
+    """Short. The closest game and the worst beating, nothing else."""
     week = view.week if week is None else week
     try:
         scored = _scored_matchups(view, week)
@@ -284,14 +236,6 @@ def build_sunday_update(view: LeagueView, week: int | None = None) -> str | None
         lines.append(score_line(wide_high.short, wide_high.points,
                                 wide_low.short, wide_low.points))
 
-    leaders = [m.ordered()[0].short for m in scored if m.margin > 0]
-    if leaders:
-        lines.append("")
-        lines.append(_name_run("Up: ", leaders))
-
-    remaining = _still_playing(view, week)
-    if remaining:
-        lines.append(f"{remaining} starters left.")
     return fit(lines)
 
 

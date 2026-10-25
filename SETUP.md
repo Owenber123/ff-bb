@@ -392,7 +392,7 @@ SLEEPER_TIMEZONE=America/New_York
 | Post | Fires when | Contains |
 | --- | --- | --- |
 | `lineups` | The main slate day, before most games kick off | **Only** the managers with an empty slot, a starter on bye, or a starter OUT |
-| `sunday` | The afternoon slate is done, the week is not | Closest game, worst beating, who is up, what is left |
+| `sunday` | The afternoon slate is done, the week is not | Closest game, worst beating |
 | `recap` | Every game in the week has finished | Final scores, high, low, blowout, closest, worst bench call |
 | `shotgun` | 9am the morning after the week's last game (normally Tuesday) | Every manager who started a player — DEF included — who scored 0 or less, with `(N)` when it was more than one. Bench players and empty slots do not count. Silent if nobody qualifies |
 | `ahead` | Wednesday morning, once the week has rolled over | Game of the week, matchups, overnight waiver results |

@@ -207,8 +207,10 @@ def test_sunday_names_a_blowout_when_there_is_one(live):
     assert "bloqus" in text and "bru" in text
 
 
-def test_sunday_says_who_is_winning(live):
-    assert "Up: " in (ffposts.build_sunday_update(live, 1) or "")
+def test_sunday_ends_after_the_beatdown(live):
+    text = ffposts.build_sunday_update(live, 1) or ""
+    assert "Up: " not in text
+    assert "starters left" not in text
 
 
 def test_sunday_is_short(live):
