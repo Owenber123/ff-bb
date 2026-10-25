@@ -1,4 +1,4 @@
-"""The four scheduled posts.
+"""The five scheduled posts.
 
 These arrive uninvited on twelve phones, so the bar is higher than for a
 command somebody asked for. Two rules follow from that:
@@ -428,6 +428,48 @@ def _waiver_lines(view: LeagueView, week: int, client) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 5. Tuesday morning -- the shotgun list
+# ---------------------------------------------------------------------------
+
+
+def shotgun_counts(view: LeagueView, week: int) -> list[tuple[str, int]]:
+    """(manager, starters at or below zero) for everyone with at least one.
+
+    Starters only, DEF included; the bench never counts. An empty slot is not
+    a zero-point starter -- nobody played there -- so it does not count either
+    (the lineup check is what shames that). Most zeros first, then name.
+    """
+    matchups, _, _ = view.matchups(week)
+    sides = [side for matchup in matchups for side in matchup.sides]
+    # Before kickoff every starter is on 0.0. That is not a shotgun list.
+    if not any(side.points > 0 for side in sides):
+        return []
+    out = []
+    for side in sides:
+        duds = sum(1 for _, points in side.started() if points <= 0)
+        if duds:
+            out.append((side.short, duds))
+    out.sort(key=lambda pair: (-pair[1], pair[0].lower()))
+    return out
+
+
+def build_shotgun(view: LeagueView, week: int | None = None) -> str | None:
+    """Everyone who started somebody that scored zero or worse.
+
+    Silent when nobody qualifies, like the lineup check: an empty list is not
+    news. The header says what it is, so the body is just the names.
+    """
+    week = view.week if week is None else week
+    try:
+        counts = shotgun_counts(view, week)
+    except Exception:
+        return None
+    if not counts:
+        return None
+    return fit([name if duds < 2 else f"{name} ({duds})" for name, duds in counts])
+
+
+# ---------------------------------------------------------------------------
 # registry -- the scheduler and !preview both drive off this
 # ---------------------------------------------------------------------------
 
@@ -449,9 +491,11 @@ POST_TYPES: dict[str, PostType] = {
                       "After the week's last game finishes"),
     "ahead": PostType("ahead", "Week ahead", build_week_ahead,
                       "Wednesday morning, after waivers clear"),
+    "shotgun": PostType("shotgun", "Shotgun list", build_shotgun,
+                        "9am the day after the week's last game"),
 }
 
-POST_ORDER: tuple[str, ...] = ("lineups", "sunday", "recap", "ahead")
+POST_ORDER: tuple[str, ...] = ("lineups", "sunday", "recap", "shotgun", "ahead")
 
 # Header titles. Short by necessity: "🤖 bloqBot - " already spends about half
 # the line, leaving ~17 columns.
@@ -460,6 +504,7 @@ TITLE_FORMATS: dict[str, str] = {
     "sunday": "sunday wk{week}",
     "recap": "recap wk{week}",
     "ahead": "ahead wk{week}",
+    "shotgun": "shotgun list wk{week}",
 }
 
 

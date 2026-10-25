@@ -229,7 +229,7 @@ COMMAND_ARGS = {
     "8ball": ["should I start my kicker over my quarterback"],
     "poll": ["who is the worst commissioner in this league | charliemalone | Ryanmd211"],
     "vote": ["1"],
-    "preview": ["", "recap", "recap --wide", "lineups", "sunday", "ahead"],
+    "preview": ["", "recap", "recap --wide", "lineups", "sunday", "shotgun", "ahead"],
     "link": ["charliemalone"],
     "matchups": ["", "2"],
     "bye": ["", "2"],
@@ -384,3 +384,21 @@ def test_the_width_report_flags_an_over_budget_line():
 
 def test_the_width_report_confirms_a_clean_post():
     assert "within budget" in ffposts.width_report("🏈 Week 1 final\nTKoop 100.0 › bru 90.0")
+
+
+def test_the_shotgun_list_fits_with_long_names(big):
+    big.store.set_nickname("u0", "The Undisputed Champion Of Everything")
+    rows = [
+        {"roster_id": i + 1, "matchup_id": (i // 2) + 1, "points": 50.0,
+         "starters": ["100", "101", "102"], "starters_points": [0.0, -1.0, 51.0],
+         "players_points": {}}
+        for i in range(12)
+    ]
+    big.session.routes[f"/league/{BIG_LEAGUE}/matchups/1"] = rows
+    big.client._cache.clear()
+    view = load_view(big.client, BIG_LEAGUE, nicknames=big.store.nicknames())
+    text = ffposts.build("shotgun", view, 1)
+    assert text is not None and len(text.split("\n")) == 12
+    assert_fits(text, "shotgun with a long nickname")
+    wire = enforce_width(compose_message(PREFIX, ffposts.post_title("shotgun", 14), text))
+    assert_fits(wire, "shotgun on the wire")

@@ -36,7 +36,7 @@ The troubleshooting section below works outward along that path.
 | `ffleague.py` | The joins (roster→user→matchup) and derived stats. |
 | `ffcommands.py` | The fantasy commands. Add yours here. |
 | `ffroast.py` | Fact mining and templates for `!roast` / `!cope` / `!curse`. |
-| `ffposts.py` | The four scheduled posts. Pure builders, no sending. |
+| `ffposts.py` | The five scheduled posts. Pure builders, no sending. |
 | `ffschedule.py` | When those posts fire. Triggers off game state, not cron. |
 | `ffstore.py` | SQLite: nicknames, fines, polls, links, what has been posted. |
 | `ffformat.py` | iMessage text helpers. Read the header before formatting anything. |
@@ -379,13 +379,13 @@ rather than failing or quietly pretending it is live:
 
 ## 9. Scheduled posts
 
-The bot mostly speaks without being asked. Four posts a week, to one chat,
+The bot mostly speaks without being asked. Five posts a week, to one chat,
 off by default until you have looked at them.
 
 ```ini
 SLEEPER_POSTS_ENABLED=true
 SLEEPER_POST_CHAT=iMessage;+;chat1234567890123456789
-SLEEPER_POST_TYPES=lineups,sunday,recap,ahead
+SLEEPER_POST_TYPES=lineups,sunday,recap,shotgun,ahead
 SLEEPER_TIMEZONE=America/New_York
 ```
 
@@ -394,6 +394,7 @@ SLEEPER_TIMEZONE=America/New_York
 | `lineups` | The main slate day, before most games kick off | **Only** the managers with an empty slot, a starter on bye, or a starter OUT |
 | `sunday` | The afternoon slate is done, the week is not | Closest game, worst beating, who is up, what is left |
 | `recap` | Every game in the week has finished | Final scores, high, low, blowout, closest, worst bench call |
+| `shotgun` | 9am the morning after the week's last game (normally Tuesday) | Every manager who started a player — DEF included — who scored 0 or less, with `(N)` when it was more than one. Bench players and empty slots do not count. Silent if nobody qualifies |
 | `ahead` | Wednesday morning, once the week has rolled over | Game of the week, matchups, overnight waiver results |
 
 ### Why there is no cron entry here
@@ -407,11 +408,18 @@ So the triggers read game state. The schedule endpoint gives every game a
 30-minute settle so Sleeper's final scoring lands). A week that ends on a
 Saturday recaps on Saturday; nothing is hardcoded to a day. The scheduler polls
 every five minutes and consults the clock for exactly two things: not posting
-at 4am, and knowing whether it is Wednesday.
+at 4am, and knowing which day it is (Wednesday for `ahead`, the day after the
+last game for `shotgun`).
+
+The shotgun list fires only on that one day after the last game — never the
+night the week finishes, and never later in the week, when the next week's
+Thursday game may already be under way. If `/state/nfl` rolls over to the new
+week before 9am, it looks back one week until the new week kicks off.
 
 ### Silence is a feature
 
-The lineup check posts **nothing** when everyone is clean. A weekly
+The lineup check posts **nothing** when everyone is clean, and the shotgun
+list posts nothing when nobody started a zero. A weekly
 "everything looks fine!" is noise, and noise is how a bot gets muted. Likewise,
 if Sleeper is down or the week has no data, a post is skipped rather than sent
 half-rendered — and skipping does not consume the week's one allowed fire, so a
@@ -445,12 +453,13 @@ Games this week: 14, finished 13
   lineups  no              not the slate day (2025-10-05)
   sunday   no              the week is already over
   recap    no              1 games still to finish
+  shotgun  no              1 games still to finish
   ahead    no              not Wednesday
 ```
 
 ### Volume
 
-Four posts a week, at most one per post type, at most one per five-minute tick.
+Five posts a week, at most one per post type, at most one per five-minute tick.
 Every fire is written to SQLite **before** the send, keyed by
 (season, week, kind), so a restart mid-week reposts nothing.
 
