@@ -1212,7 +1212,7 @@ def cmd_link(args: str, ctx: CommandContext, view: LeagueView) -> str:
 @command(
     "preview",
     help="Render a scheduled post now, without waiting for its trigger.",
-    usage="preview <lineups|sunday|recap|ahead>",
+    usage="preview <lineups|sunday|recap|shotgun|ahead>",
     category=ADMIN,
 )
 @league_command()

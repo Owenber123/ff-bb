@@ -1,4 +1,4 @@
-"""The scheduler: decides *when* the four posts fire.
+"""The scheduler: decides *when* the five posts fire.
 
 Not a cron. NFL kickoff times move -- Thursday, Saturday in December, 9:30am
 London games, Monday doubleheaders, flexed Sunday nights -- and a fixed
@@ -13,6 +13,7 @@ about the NFL because they are not predicting anything:
               kicked off yet, and it is past a civilised hour
     sunday    the main slate is essentially done but the week is not
     recap     every game in the week is complete (plus a settle delay)
+    shotgun   the week is complete and it is 9am the day after its last game
     ahead     it is Wednesday morning and the week has rolled over
 
 Clock time is used for exactly two things: not posting at 4am, and knowing
@@ -32,7 +33,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import ffposts
 from ffleague import load_view
@@ -60,6 +61,7 @@ LINEUP_MIN_UNSTARTED = 0.5  # still worth posting if <=half the slate has begun
 SUNDAY_SLATE_DONE = 0.75  # "the afternoon games are over"
 RECAP_SETTLE_SECONDS = 1800.0  # let Sleeper's final scoring settle
 AHEAD_EARLIEST_HOUR = 9
+SHOTGUN_EARLIEST_HOUR = 9
 AHEAD_WEEKDAY = 2  # Monday=0, so 2 is Wednesday
 
 
@@ -120,6 +122,17 @@ def _split(games: list[dict]) -> tuple[int, int, int]:
 def week_is_complete(games: list[dict]) -> bool:
     total, _, finished = _split(games)
     return total > 0 and finished == total
+
+
+def _last_game_day(games: list[dict]) -> date | None:
+    """The date of the week's final game -- Monday, normally."""
+    days = []
+    for game in games:
+        try:
+            days.append(date.fromisoformat(str(game.get("date") or "")))
+        except ValueError:
+            continue
+    return max(days) if days else None
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +261,38 @@ class Scheduler:
                 return Decision(kind, False, "the week shown is already played")
             return Decision(kind, True, "Wednesday morning, new week loaded")
 
+        if kind == "shotgun":
+            if not week_is_complete(games):
+                return Decision(kind, False, f"{total - finished} games still to finish")
+            last = _last_game_day(games)
+            if last is None:
+                return Decision(kind, False, "no game dates this week")
+            # Exactly the day after: never the night the week ends, and never
+            # days later, when next week's Thursday game may already be on.
+            if now.date() <= last:
+                return Decision(kind, False, "the week only just finished")
+            if now.date() > last + timedelta(days=1):
+                return Decision(kind, False, "too late; the week is old news")
+            if now.hour < SHOTGUN_EARLIEST_HOUR:
+                return Decision(kind, False, f"too early ({now.hour}:00)")
+            return Decision(kind, True, "morning after the week's last game")
+
         return Decision(kind, False, "unknown post type")
+
+    def target(self, kind: str, view, games: list[dict]) -> tuple[int, list[dict]]:
+        """The week ``kind`` is about, and that week's games.
+
+        Every post is about ``view.week`` except the shotgun list, which is
+        about the week that just ended. If /state/nfl rolls over before 9am
+        Tuesday, ``view.week`` is already the new, unplayed week, so look back
+        one. Once the new week has kicked off it stays put, and the stale week
+        is never posted.
+        """
+        if kind == "shotgun" and view.week > 1 and games:
+            total, unstarted, _ = _split(games)
+            if unstarted == total:
+                return view.week - 1, self.sleeper.week_games(view.season, view.week - 1)
+        return view.week, games
 
     # -- one pass ------------------------------------------------------------
 
@@ -291,36 +335,37 @@ class Scheduler:
         for kind in ffposts.POST_ORDER:
             if not self.kind_enabled(kind):
                 continue
-            if self.store.already_posted(view.season, view.week, kind):
+            week, week_games = self.target(kind, view, games)
+            if self.store.already_posted(view.season, week, kind):
                 continue
 
-            decision = self.decide(kind, view, games, now)
+            decision = self.decide(kind, view, week_games, now)
             log.debug(
                 "scheduler decision",
                 extra={"fields": {"kind": kind, "fire": decision.fire, "reason": decision.reason,
-                                  "week": view.week}},
+                                  "week": week}},
             )
             if not decision.fire:
                 continue
 
-            text = ffposts.build(kind, view, view.week)
+            text = ffposts.build(kind, view, week)
             if not text:
                 # Nothing worth saying, or the data was not there. Do NOT mark
                 # it posted: a clean lineup at 10am may be a broken one at
                 # 11am, and an outage now should not cost the week's recap.
                 log.info(
                     "scheduler: nothing to post",
-                    extra={"fields": {"kind": kind, "week": view.week}},
+                    extra={"fields": {"kind": kind, "week": week}},
                 )
                 continue
 
             # Recorded before sending. A crash between the two loses one post;
             # the other order risks posting the same thing every five minutes.
-            self.store.mark_posted(view.season, view.week, kind)
-            if self.publish(text, kind, ffposts.post_title(kind, view.week)):
+            self.store.mark_posted(view.season, week, kind)
+            if self.publish(text, kind, ffposts.post_title(kind, week)):
                 log.info(
                     "scheduled post sent",
-                    extra={"fields": {"kind": kind, "week": view.week, "chars": len(text)}},
+                    extra={"fields": {"kind": kind, "week": week, "chars": len(text)}},
                 )
             return kind
 

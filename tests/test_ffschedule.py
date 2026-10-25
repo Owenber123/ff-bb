@@ -292,7 +292,7 @@ def test_a_new_week_allows_the_post_again(sched):
 
 
 def test_only_one_post_goes_out_per_tick(sched):
-    # Spacing sends is what keeps four posts from landing at once, and is the
+    # Spacing sends is what keeps five posts from landing at once, and is the
     # seam a rate limiter would use.
     sched.scheduler.decide = lambda k, v, g, n: ffschedule.Decision(k, True, "forced")
     first = sched.scheduler.tick(at(SUNDAY, 11))
@@ -436,8 +436,8 @@ def test_a_west_coast_league_is_warned_before_the_10am_kickoff(sched):
 # ---------------------------------------------------------------------------
 
 
-def test_the_week_produces_at_most_four_posts(sched):
-    """Four to six bot-initiated messages a week, not more."""
+def test_the_week_produces_at_most_one_of_each_post(sched):
+    """Five bot-initiated messages a week at most, never a repeat."""
     sched.scheduler.decide = lambda k, v, g, n: ffschedule.Decision(k, True, "forced")
     sent = []
     when = at(SUNDAY, 11)
@@ -448,3 +448,122 @@ def test_the_week_produces_at_most_four_posts(sched):
         when += timedelta(minutes=5)
     assert len(sent) <= len(ffposts.POST_ORDER)
     assert len(sent) == len(set(sent))  # no repeats
+
+
+# ---------------------------------------------------------------------------
+# shotgun list -- 9am the morning after the week's last game
+# ---------------------------------------------------------------------------
+
+TUESDAY = "2025-10-07"
+
+
+def test_shotgun_fires_tuesday_morning_after_mnf(sched):
+    done = games(sunday_status="complete", monday="complete")
+    assert decide(sched, "shotgun", done, at(TUESDAY, 9)).fire
+
+
+def test_shotgun_does_not_fire_on_monday_night(sched):
+    # The week is over, but the list is a morning-after post.
+    done = games(sunday_status="complete", monday="complete")
+    decision = decide(sched, "shotgun", done, at(MONDAY, 23, 45))
+    assert not decision.fire
+    assert "just finished" in decision.reason
+
+
+def test_shotgun_does_not_fire_before_9am(sched):
+    done = games(sunday_status="complete", monday="complete")
+    assert not decide(sched, "shotgun", done, at(TUESDAY, 8, 59)).fire
+
+
+def test_shotgun_may_fire_late_the_same_day(sched):
+    # The bot was down at 9am; mid-afternoon is still the morning after.
+    done = games(sunday_status="complete", monday="complete")
+    assert decide(sched, "shotgun", done, at(TUESDAY, 16)).fire
+
+
+def test_shotgun_is_never_posted_days_late(sched):
+    done = games(sunday_status="complete", monday="complete")
+    decision = decide(sched, "shotgun", done, at("2025-10-08", 9))
+    assert not decision.fire
+    assert "too late" in decision.reason
+
+
+def test_shotgun_waits_for_every_game(sched):
+    still_going = games(sunday_status="complete", monday="in_game")
+    assert not decide(sched, "shotgun", still_going, at(TUESDAY, 9)).fire
+
+
+def test_shotgun_waits_for_a_monday_doubleheader(sched):
+    nightcap = {"week": 5, "date": MONDAY, "home": "LAR", "away": "SF", "status": "in_game"}
+    one_left = games(sunday_status="complete", monday="complete") + [nightcap]
+    assert not decide(sched, "shotgun", one_left, at(TUESDAY, 9)).fire
+    both_done = one_left[:-1] + [dict(nightcap, status="complete")]
+    assert decide(sched, "shotgun", both_done, at(TUESDAY, 9)).fire
+
+
+def test_shotgun_follows_the_last_game_not_the_weekday(sched):
+    # A week that ends on Saturday posts on Sunday morning.
+    done = [{"week": 16, "date": "2025-12-20", "home": "A", "away": "B", "status": "complete"}]
+    assert decide(sched, "shotgun", done, at("2025-12-21", 9)).fire
+
+
+# Week 4 in the fixture, with a zero to report: Thu 25th, Sun 28th, Mon 29th.
+WEEK4_GAMES = [
+    {"week": 4, "date": "2025-09-25", "home": "BUF", "away": "KC", "status": "complete"},
+    {"week": 4, "date": "2025-09-28", "home": "CIN", "away": "ATL", "status": "complete"},
+    {"week": 4, "date": "2025-09-29", "home": "PHI", "away": "DAL", "status": "complete"},
+]
+WEEK5_GAMES = [dict(g, week=5, date=d, status="pre_game")
+               for g, d in zip(WEEK4_GAMES, ("2025-10-02", "2025-10-05", "2025-10-06"))]
+WEEK4_ZEROS = [
+    {"roster_id": 1, "matchup_id": 1, "points": 50.0, "starters": ["100", "101"],
+     "starters_points": [0.0, 50.0], "players_points": {"100": 0.0, "101": 50.0}},
+    {"roster_id": 2, "matchup_id": 1, "points": 60.0, "starters": ["200", "201"],
+     "starters_points": [30.0, 30.0], "players_points": {"200": 30.0, "201": 30.0}},
+]
+
+
+def _shotgun_sched(tmp_path, state_week=4, week5=WEEK5_GAMES):
+    routes = build_routes()
+    routes["/state/nfl"] = {"week": state_week, "season": "2025", "season_type": "regular"}
+    routes["/schedule/nfl/regular/2025"] = WEEK4_GAMES + week5
+    routes[f"/league/{LEAGUE_ID}/matchups/4"] = WEEK4_ZEROS
+    sleeper = SleeperClient(tmp_path / "s", session=FakeSession(routes))
+    sleeper.players()
+    cfg = SimpleNamespace(
+        sleeper_league_id=LEAGUE_ID, sleeper_post_chat="iMessage;+;chatFF",
+        sleeper_posts_enabled=True, sleeper_post_types=("shotgun",),
+        sleeper_timezone="America/New_York", dry_run=False,
+    )
+    bb = FakeBB()
+    store = Store(tmp_path / "shotgun.db")
+    return SimpleNamespace(scheduler=Scheduler(cfg, bb, sleeper, store), bb=bb, store=store)
+
+
+def test_shotgun_posts_once_per_week(tmp_path):
+    s = _shotgun_sched(tmp_path)
+    assert s.scheduler.tick(at("2025-09-30", 8, 55)) is None
+    assert s.scheduler.tick(at("2025-09-30", 9)) == "shotgun"
+    for minute in (5, 10, 15):
+        assert s.scheduler.tick(at("2025-09-30", 9, minute)) is None
+    assert len(s.bb.sent) == 1
+    _, body, title = s.bb.sent[0]
+    assert title == "shotgun list wk4"
+    assert body == "bloqus"
+    assert s.store.already_posted("2025", 4, "shotgun")
+
+
+def test_shotgun_survives_an_early_week_rollover(tmp_path):
+    """/state/nfl moving to week 5 overnight must not cost week 4's list."""
+    s = _shotgun_sched(tmp_path, state_week=5)
+    assert s.scheduler.tick(at("2025-09-30", 9)) == "shotgun"
+    assert s.bb.sent[0][2] == "shotgun list wk4"
+    assert s.store.already_posted("2025", 4, "shotgun")
+    assert not s.store.already_posted("2025", 5, "shotgun")
+
+
+def test_shotgun_never_looks_back_once_the_new_week_has_started(tmp_path):
+    started = [dict(WEEK5_GAMES[0], status="in_game")] + WEEK5_GAMES[1:]
+    s = _shotgun_sched(tmp_path, state_week=5, week5=started)
+    assert s.scheduler.tick(at("2025-09-30", 9)) is None
+    assert s.bb.sent == []

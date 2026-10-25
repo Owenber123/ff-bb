@@ -1,4 +1,4 @@
-"""The four scheduled posts.
+"""The five scheduled posts.
 
 These arrive uninvited, so the tests care about two things above all: that a
 post is never sent when there is nothing worth saying, and that it stays short
@@ -352,3 +352,97 @@ def test_week_ahead_ignores_failed_claims(live):
     # The failed claim in the fixture is roster 2's; only the completed
     # add should appear.
     assert text.count("P. Nacua") == 1
+
+
+# ---------------------------------------------------------------------------
+# 5. shotgun list
+# ---------------------------------------------------------------------------
+
+
+def _shotgun_view(tmp_path, rows, week=4):
+    routes = build_routes()
+    routes[f"/league/{LEAGUE_ID}/matchups/{week}"] = rows
+    return _view(tmp_path, routes)
+
+
+def _row(roster_id, matchup_id, starters, starter_points, bench=None):
+    players_points = dict(zip(starters, starter_points))
+    players_points.update(bench or {})
+    return {
+        "roster_id": roster_id, "matchup_id": matchup_id,
+        "points": sum(starter_points), "starters": starters,
+        "starters_points": starter_points, "players_points": players_points,
+    }
+
+
+SHOTGUN_ROWS = [
+    # bloqus: one zero and one negative -- two, so "(2)".
+    _row(1, 1, ["100", "101", "102", "103"], [0.0, 25.0, -1.5, 20.0]),
+    # barryyung: a clean lineup, but a zero on the bench, which does not count.
+    _row(2, 1, ["200", "201", "202", "203"], [30.0, 20.0, 20.0, 20.0], bench={"204": 0.0}),
+    # bru32: an empty slot (Sleeper's "0", scored 0.0) and a negative DEF.
+    _row(3, 2, ["300", "0", "PHI"], [50.0, 0.0, -2.0]),
+    # bloqus2: exactly one zero, so no count.
+    _row(4, 2, ["400", "401"], [70.0, 0.0]),
+]
+
+
+def test_shotgun_lists_everyone_who_started_a_zero(tmp_path):
+    text = ffposts.build("shotgun", _shotgun_view(tmp_path, SHOTGUN_ROWS), 4)
+    assert text.split("\n") == ["bloqus (2)", "bloqus2", "bru"]
+
+
+def test_shotgun_counts_zero_and_negative(tmp_path):
+    counts = dict(ffposts.shotgun_counts(_shotgun_view(tmp_path, SHOTGUN_ROWS), 4))
+    assert counts["bloqus"] == 2  # 0.0 and -1.5
+
+
+def test_shotgun_counts_a_negative_defense(tmp_path):
+    counts = dict(ffposts.shotgun_counts(_shotgun_view(tmp_path, SHOTGUN_ROWS), 4))
+    # The empty slot beside it is not a starter, so this is the DEF alone.
+    assert counts["bru"] == 1  # bru32, shortened as everywhere else
+
+
+def test_shotgun_ignores_the_bench(tmp_path):
+    counts = dict(ffposts.shotgun_counts(_shotgun_view(tmp_path, SHOTGUN_ROWS), 4))
+    assert "barryyung" not in counts
+
+
+def test_shotgun_count_is_shown_only_for_two_or_more(tmp_path):
+    text = ffposts.build("shotgun", _shotgun_view(tmp_path, SHOTGUN_ROWS), 4)
+    assert "(1)" not in text
+    assert "bloqus2" in text.split("\n")
+
+
+def test_shotgun_orders_most_zeros_first_then_name(tmp_path):
+    rows = [
+        _row(1, 1, ["100", "101"], [0.0, 10.0]),
+        _row(2, 1, ["200", "201", "202"], [0.0, 0.0, 0.0]),
+        _row(3, 2, ["300", "301"], [-1.0, -1.0]),
+        _row(4, 2, ["400", "401"], [0.0, 5.0]),
+    ]
+    text = ffposts.build("shotgun", _shotgun_view(tmp_path, rows), 4)
+    assert text.split("\n") == ["barryyung (3)", "bru (2)", "bloqus", "bloqus2"]
+
+
+def test_shotgun_uses_the_nickname(tmp_path):
+    routes = build_routes()
+    routes[f"/league/{LEAGUE_ID}/matchups/4"] = SHOTGUN_ROWS
+    view = _view(tmp_path, routes, nicknames={"u1": "Captain"})
+    assert ffposts.build("shotgun", view, 4).split("\n")[0] == "Captain (2)"
+
+
+def test_nobody_on_the_shotgun_list_posts_nothing(tmp_path):
+    # Silence, like the lineup check: an empty list is not news.
+    rows = [_row(r, 1 + (r > 2), ["1%d" % r, "2%d" % r], [10.0, 5.0]) for r in (1, 2, 3, 4)]
+    assert ffposts.build("shotgun", _shotgun_view(tmp_path, rows), 4) is None
+
+
+def test_an_unplayed_week_is_not_a_shotgun_list(tmp_path):
+    # Before kickoff every starter is on 0.0. That must not name the league.
+    rows = [_row(r, 1 + (r > 2), ["1%d" % r, "2%d" % r], [0.0, 0.0]) for r in (1, 2, 3, 4)]
+    assert ffposts.build("shotgun", _shotgun_view(tmp_path, rows), 4) is None
+
+
+def test_the_shotgun_title(tmp_path):
+    assert ffposts.post_title("shotgun", 14) == "shotgun list wk14"

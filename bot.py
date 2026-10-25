@@ -465,8 +465,9 @@ def cmd_post(cfg: Config, args: argparse.Namespace) -> int:
         print(f"Games this week: {len(games)}, finished {done}")
         print()
         for kind in ffposts.POST_ORDER:
-            decision = scheduler.decide(kind, view, games, now)
-            posted = scheduler.store.already_posted(view.season, view.week, kind)
+            week, week_games = scheduler.target(kind, view, games)
+            decision = scheduler.decide(kind, view, week_games, now)
+            posted = scheduler.store.already_posted(view.season, week, kind)
             flag = "ALREADY POSTED" if posted else ("WOULD FIRE" if decision.fire else "no")
             print(f"  {kind:<8} {flag:<15} {decision.reason}")
         return 0
@@ -561,12 +562,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_post = sub.add_parser("post", help="render, test or send a scheduled post")
     post_sub = p_post.add_subparsers(dest="post_action", required=True)
     p_render = post_sub.add_parser("render", help="print a post without sending it")
-    p_render.add_argument("kind", help="lineups | sunday | recap | ahead")
+    p_render.add_argument("kind", help="lineups | sunday | recap | shotgun | ahead")
     p_render.add_argument("--week", type=int, default=None)
     p_render.add_argument("--wide", action="store_true",
                           help="report line widths against the 30-column budget")
     p_send = post_sub.add_parser("send", help="send a post now")
-    p_send.add_argument("kind", help="lineups | sunday | recap | ahead")
+    p_send.add_argument("kind", help="lineups | sunday | recap | shotgun | ahead")
     p_send.add_argument("--week", type=int, default=None)
     p_send.add_argument("--chat", default=None, help="override SLEEPER_POST_CHAT")
     p_send.add_argument("--mark", action="store_true",
